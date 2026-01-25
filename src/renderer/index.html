@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PaperAgent - LLM论文辅助工具</title>
+  <link rel="stylesheet" href="./styles/main.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 顶部导航栏 -->
+    <header class="top-nav">
+      <div class="nav-left">
+        <h1>PaperAgent</h1>
+      </div>
+      <div class="nav-center">
+        <button id="newSessionBtn" class="btn btn-primary">新建会话</button>
+        <button id="saveSessionBtn" class="btn btn-secondary">保存会话</button>
+        <button id="loadSessionBtn" class="btn btn-secondary">加载会话</button>
+      </div>
+      <div class="nav-right">
+        <span id="sessionTitle">无活动会话</span>
+      </div>
+    </header>
+
+    <!-- 主内容区域 -->
+    <div class="main-container">
+      <!-- 左侧会话历史面板 -->
+      <aside class="sidebar left-sidebar session-history-panel">
+        <h3>会话历史</h3>
+        <div id="sessionHistoryContainer" class="session-history-container">
+          <!-- 会话历史内容将通过JavaScript动态生成 -->
+        </div>
+      </aside>
+
+      <!-- 中央大纲面板 -->
+      <aside class="sidebar middle-sidebar outline-panel">
+        <h3>会话大纲</h3>
+        <div id="outlineContainer" class="outline-container">
+          <!-- 大纲内容将通过JavaScript动态生成 -->
+        </div>
+      </aside>
+
+      <!-- 中央聊天区域 -->
+      <main class="chat-area">
+        <div id="chatContainer" class="chat-container">
+          <!-- 聊天消息将通过JavaScript动态生成 -->
+          <div class="welcome-message">
+            <h2>欢迎使用PaperAgent</h2>
+            <p>这是一个用于与LLM交互的图形化工具，旨在解决上下文不一致问题并支持文档关联功能，特别适用于学术论文阅读和思考辅助。</p>
+            <p>点击"新建会话"开始您的第一次对话。</p>
+          </div>
+        </div>
+        <div class="input-area">
+          <textarea id="messageInput" placeholder="输入您的问题或指令..."></textarea>
+          <button id="sendBtn" class="btn btn-primary">发送</button>
+        </div>
+      </main>
+
+      <!-- 右侧文档库面板 -->
+      <aside class="sidebar right-sidebar">
+        <h3>文档库</h3>
+        <div class="document-actions">
+          <button id="addDocumentBtn" class="btn btn-secondary">添加文档</button>
+          <input type="text" id="documentSearch" placeholder="搜索文档...">
+        </div>
+        <div id="documentContainer" class="document-container">
+          <!-- 文档列表将通过JavaScript动态生成 -->
+        </div>
+      </aside>
+    </div>
+  </div>
+
+  <script src="./scripts/components/sessionManager.js"></script>
+  <script src="./scripts/components/outlineComponent.js"></script>
+  <script src="./scripts/services/llmService.js"></script>
+  <script src="./scripts/services/documentService.js"></script>
+  <script src="./scripts/services/contextService.js"></script>
+  <script src="./scripts/main.js"></script>
+</body>
+</html>
