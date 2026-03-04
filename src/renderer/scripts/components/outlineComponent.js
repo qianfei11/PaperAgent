@@ -1,4 +1,4 @@
-class OutlineComponent {
+export class OutlineComponent {
     container;
     outlineData;
     constructor(containerId) {
@@ -125,4 +125,4 @@ class OutlineComponent {
         return result.removed;
     }
 }
-//# sourceMappingURL=outlineComponent.js.map;
+//# sourceMappingURL=outlineComponent.js.map

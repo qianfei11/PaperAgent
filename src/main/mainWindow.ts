@@ -26,7 +26,7 @@ export function createMainWindow(): BrowserWindow {
   });
 
   // 加载应用的index.html
-  mainWindow.loadFile(path.join(__dirname, '../../src/renderer/index.html'));
+  mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   // 打开开发者工具（仅在开发环境中）
   if (process.argv.includes('--dev')) {

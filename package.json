@@ -2,18 +2,16 @@
   "name": "paper-agent",
   "version": "1.0.0",
   "description": "A graphical tool for LLM interaction with context management and document association",
-  "type": "module",
   "main": "./dist/main/index.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "tsc && node copy-js.cjs && electron-builder",
-    "build:win": "tsc && node copy-js.cjs && electron-builder --win",
-    "build:mac": "tsc && node copy-js.cjs && electron-builder --mac",
-    "build:linux": "tsc && node copy-js.cjs && electron-builder --linux",
-    "compile": "tsc && node copy-js.cjs",
+    "build": "tsc -p tsconfig.json && tsc -p tsconfig.main.json && node copy-js.cjs && electron-builder",
+    "build:win": "tsc -p tsconfig.json && tsc -p tsconfig.main.json && node copy-js.cjs && electron-builder --win",
+    "build:mac": "tsc -p tsconfig.json && tsc -p tsconfig.main.json && node copy-js.cjs && electron-builder --mac",
+    "build:linux": "tsc -p tsconfig.json && tsc -p tsconfig.main.json && node copy-js.cjs && electron-builder --linux",
+    "compile": "tsc -p tsconfig.json && tsc -p tsconfig.main.json && node copy-js.cjs",
     "watch": "tsc --watch",
-    "dev:build": "tsc && node copy-js.cjs && node transform-js-renderer.cjs",
     "electron-dev": "electron --disable-web-security --allow-running-insecure-content . --dev"
   },
   "keywords": [
@@ -35,11 +33,9 @@
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "@types/sqlite3": "^3.1.8",
     "axios": "^1.4.0",
     "lowdb": "^6.0.0",
     "pdfjs-dist": "^3.0.0",
-    "sqlite3": "^5.1.6",
     "tesseract.js": "^4.0.0",
     "uuid": "^13.0.0"
   },

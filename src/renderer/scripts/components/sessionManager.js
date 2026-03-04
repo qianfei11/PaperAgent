@@ -1,4 +1,4 @@
-class SessionManager {
+export class SessionManager {
     sessions = [];
     container;
     onSelectCallback = null;
@@ -107,4 +107,4 @@ class SessionManager {
         });
     }
 }
-//# sourceMappingURL=sessionManager.js.map;
+//# sourceMappingURL=sessionManager.js.map

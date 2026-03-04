@@ -1,6 +1,6 @@
 // src/renderer/scripts/components/outlineComponent.ts
 
-import { OutlineItem } from '../../../shared/types';
+import type { OutlineItem } from '../../../shared/types.js';
 
 export class OutlineComponent {
   private container: HTMLElement;

@@ -1,13 +1,15 @@
 // src/shared/utils.ts
 
-import { v4 as uuidv4 } from 'uuid';
 import { SessionData, OutlineItem } from './types';
 
 /**
  * 生成UUID
  */
 export function generateId(): string {
-  return uuidv4();
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0;
+    return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+  });
 }
 
 /**

@@ -1,6 +1,6 @@
 // src/renderer/scripts/services/llmService.ts
 
-import { Context } from '../../../shared/types';
+import type { Context, LLMProviderConfig } from '../../../shared/types.js';
 
 export interface LLMService {
   sendMessage(context: Context, userMessage: string): Promise<string>;
@@ -9,114 +9,193 @@ export interface LLMService {
   identifyEntities(text: string): Promise<string[]>;
 }
 
-export class OpenAILLMService implements LLMService {
-  private apiKey: string;
-  private apiUrl: string = 'https://api.openai.com/v1/chat/completions';
+type ChunkCallback = (text: string) => void;
+type DoneCallback = (fullText: string) => void;
+type ErrorCallback = (error: string) => void;
 
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
+declare const window: Window & {
+  electronAPI: {
+    sendLLMMessage: (requestId: string, messages: Array<{ role: string; content: string }>, config: LLMProviderConfig) => void;
+    onLLMChunk: (cb: (data: { requestId: string; text: string }) => void) => void;
+    onLLMDone: (cb: (data: { requestId: string }) => void) => void;
+    onLLMError: (cb: (data: { requestId: string; error: string }) => void) => void;
+    removeLLMListeners: () => void;
+  };
+};
+
+export class OpenAILLMService implements LLMService {
+  private providerConfig: LLMProviderConfig | null = null;
+
+  constructor(apiKey?: string) {
+    if (apiKey) {
+      this.providerConfig = {
+        provider: 'openai-compatible',
+        baseUrl: 'https://api.openai.com',
+        apiKey,
+        model: 'gpt-4o',
+        temperature: 0.7,
+        maxTokens: 2048
+      };
+    }
+  }
+
+  setProviderConfig(config: LLMProviderConfig): void {
+    this.providerConfig = config;
+  }
+
+  /**
+   * 流式发送消息，通过回调函数逐块返回文本
+   */
+  sendMessageStreaming(
+    messages: Array<{ role: string; content: string }>,
+    config: LLMProviderConfig,
+    onChunk: ChunkCallback,
+    onDone: DoneCallback,
+    onError: ErrorCallback
+  ): void {
+    const requestId = Date.now().toString();
+    let fullText = '';
+
+    window.electronAPI.removeLLMListeners();
+
+    window.electronAPI.onLLMChunk((data) => {
+      if (data.requestId === requestId) {
+        fullText += data.text;
+        onChunk(data.text);
+      }
+    });
+
+    window.electronAPI.onLLMDone((data) => {
+      if (data.requestId === requestId) {
+        window.electronAPI.removeLLMListeners();
+        onDone(fullText);
+      }
+    });
+
+    window.electronAPI.onLLMError((data) => {
+      if (data.requestId === requestId) {
+        window.electronAPI.removeLLMListeners();
+        onError(data.error);
+      }
+    });
+
+    window.electronAPI.sendLLMMessage(requestId, messages, config);
+  }
+
+  /**
+   * 非流式发送，返回完整文本（供 extractKeyPoints / identifyEntities 使用）
+   */
+  private async sendOnce(messages: Array<{ role: string; content: string }>): Promise<string> {
+    if (!this.providerConfig) throw new Error('LLM 未配置，请先在设置中填写 API 信息');
+    return new Promise<string>((resolve, reject) => {
+      this.sendMessageStreaming(messages, this.providerConfig!, () => { /* no-op */ }, resolve, reject);
+    });
   }
 
   async sendMessage(context: Context, userMessage: string): Promise<string> {
-    // 构造发送给LLM的提示
-    const prompt = this.constructPrompt(context, userMessage);
-    
-    try {
-      // 这里是模拟实现，实际应该调用真实的API
-      // 在实际实现中，会使用fetch或axios调用API
-      console.log('Sending request to LLM:', prompt);
-      
-      // 模拟API响应延迟
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      
-      // 返回模拟响应
-      return this.generateMockResponse(userMessage);
-    } catch (error) {
-      console.error('Error communicating with LLM:', error);
-      throw error;
-    }
+    const messages = this.buildMessages(context, userMessage);
+    if (!this.providerConfig) throw new Error('LLM 未配置');
+    return new Promise<string>((resolve, reject) => {
+      this.sendMessageStreaming(messages, this.providerConfig!, () => { /* no-op */ }, resolve, reject);
+    });
   }
 
-  async summarizeConversation(context: Context): Promise<any> {
-    // 模拟对话总结功能
-    console.log('Summarizing conversation...');
-    
-    // 在实际实现中，这里会调用LLM来总结对话
-    return {
-      summary: "这是一个对话总结的模拟结果。",
-      keyPoints: ["关键点1", "关键点2", "关键点3"],
-      entities: ["实体1", "实体2"]
-    };
+  async summarizeConversation(context: Context): Promise<{ summary: string; keyPoints: string[]; entities: string[] }> {
+    const recentHistory = context.sessionData.conversationHistory.slice(-10);
+    const historyText = recentHistory.map(m => `${m.role === 'user' ? '用户' : '助手'}: ${m.content}`).join('\n');
+    const messages = [
+      {
+        role: 'system',
+        content: '你是一个学术研究助手，请将以下对话总结为结构化数据，用JSON格式回复，包含 summary(字符串), keyPoints(字符串数组), entities(字符串数组) 三个字段，只回复JSON，不要加markdown代码块。'
+      },
+      { role: 'user', content: historyText }
+    ];
+    try {
+      const result = await this.sendOnce(messages);
+      return JSON.parse(result);
+    } catch (_e) {
+      return { summary: '对话总结生成失败', keyPoints: [], entities: [] };
+    }
   }
 
   async extractKeyPoints(text: string): Promise<string[]> {
-    // 模拟关键点提取
-    console.log('Extracting key points from:', text.substring(0, 50) + '...');
-    
-    // 在实际实现中，这里会调用LLM来提取关键点
-    return [`关键点：${text.substring(0, 20)}`, '另一个关键点'];
+    const messages = [
+      {
+        role: 'system',
+        content: '请从以下文本中提取3-5个关键点，用JSON数组格式回复（字符串数组），只回复JSON，不要加markdown代码块。'
+      },
+      { role: 'user', content: text.substring(0, 1000) }
+    ];
+    try {
+      const result = await this.sendOnce(messages);
+      const parsed = JSON.parse(result);
+      return Array.isArray(parsed) ? parsed : this.basicKeyPointExtraction(text);
+    } catch (_e) {
+      return this.basicKeyPointExtraction(text);
+    }
   }
 
   async identifyEntities(text: string): Promise<string[]> {
-    // 模拟实体识别
-    console.log('Identifying entities in text...');
-    
-    // 在实际实现中，这里会调用LLM来识别实体
-    return ['entity1', 'entity2', 'concept1'];
-  }
-
-  private constructPrompt(context: Context, userMessage: string): string {
-    // 构造发送给LLM的完整提示，包含上下文信息
-    let prompt = "你是一个学术研究助手，帮助用户理解和分析论文及相关学术内容。\n\n";
-    
-    // 添加会话大纲上下文
-    if (context.sessionData.outline && context.sessionData.outline.length > 0) {
-      prompt += "当前讨论的大纲:\n";
-      context.sessionData.outline.forEach((item, index) => {
-        prompt += `${index + 1}. ${item.title}: ${item.summary}\n`;
-      });
-      prompt += "\n";
-    }
-    
-    // 添加相关文档上下文
-    if (context.documents && context.documents.length > 0) {
-      prompt += "相关文档:\n";
-      context.documents.forEach((doc, index) => {
-        prompt += `${index + 1}. ${doc.title || doc.path}\n`;
-      });
-      prompt += "\n";
-    }
-    
-    // 添加对话历史
-    if (context.sessionData.conversationHistory && context.sessionData.conversationHistory.length > 0) {
-      prompt += "对话历史:\n";
-      const recentHistory = context.sessionData.conversationHistory.slice(-5); // 只取最近5条
-      recentHistory.forEach(msg => {
-        prompt += `${msg.role === 'user' ? '用户' : '助手'}: ${msg.content}\n`;
-      });
-      prompt += "\n";
-    }
-    
-    // 添加用户当前消息
-    prompt += `用户当前问题: ${userMessage}\n\n`;
-    prompt += "请基于以上上下文提供详细、准确的回答。如果涉及到特定文档，请指出相关信息来源。";
-    
-    return prompt;
-  }
-
-  private generateMockResponse(userMessage: string): string {
-    // 这是一个模拟响应生成器，在实际实现中会调用真实的LLM API
-    const responses = [
-      `关于"${userMessage}"，这是一个很有趣的话题。根据我的分析，有几个关键点需要注意...`,
-      `感谢您提出关于"${userMessage}"的问题。基于当前上下文，我认为...`,
-      `您提到的"${userMessage}"确实值得深入探讨。结合相关文档，我的见解如下...`,
-      `这是一个很好的问题！关于"${userMessage}"，我建议您可以从以下几个方面考虑...`
+    const messages = [
+      {
+        role: 'system',
+        content: '请识别以下文本中的关键实体（人名、机构、概念、方法等），用JSON数组格式回复（字符串数组），只回复JSON，不要加markdown代码块。'
+      },
+      { role: 'user', content: text.substring(0, 1000) }
     ];
-    
-    const randomIndex = Math.floor(Math.random() * responses.length);
-    return responses[randomIndex] || "感谢您的提问，我会尽力帮助您。";
+    try {
+      const result = await this.sendOnce(messages);
+      const parsed = JSON.parse(result);
+      return Array.isArray(parsed) ? parsed : this.basicEntityIdentification(text);
+    } catch (_e) {
+      return this.basicEntityIdentification(text);
+    }
+  }
+
+  /**
+   * 将 Context 转为 messages 数组（OpenAI / Anthropic 通用格式）
+   */
+  buildMessages(context: Context, userMessage: string): Array<{ role: string; content: string }> {
+    let systemContent = '你是一个学术研究助手，帮助用户理解和分析论文及相关学术内容。\n\n';
+
+    if (context.sessionData.outline?.length > 0) {
+      systemContent += '当前讨论的大纲:\n';
+      context.sessionData.outline.forEach((item, index) => {
+        systemContent += `${index + 1}. ${item.title}: ${item.summary}\n`;
+      });
+      systemContent += '\n';
+    }
+
+    if (context.documents?.length > 0) {
+      systemContent += '相关文档:\n';
+      context.documents.forEach((doc, index) => {
+        const preview = doc.contentPreview ? ` (${doc.contentPreview.substring(0, 100)}...)` : '';
+        systemContent += `${index + 1}. ${doc.title || doc.path}${preview}\n`;
+      });
+      systemContent += '\n';
+    }
+
+    systemContent += '请基于以上上下文提供详细、准确的回答。';
+
+    const messages: Array<{ role: string; content: string }> = [
+      { role: 'system', content: systemContent }
+    ];
+
+    const recentHistory = context.sessionData.conversationHistory.slice(-8);
+    for (const msg of recentHistory) {
+      messages.push({ role: msg.role, content: msg.content });
+    }
+
+    messages.push({ role: 'user', content: userMessage });
+    return messages;
+  }
+
+  private basicKeyPointExtraction(text: string): string[] {
+    return text.split(/[.!?。！？]/).filter(s => s.trim().length > 10).slice(0, 3).map(s => s.trim());
+  }
+
+  private basicEntityIdentification(text: string): string[] {
+    const matches = text.match(/\b[A-Z][a-z]{2,}\b/g) ?? [];
+    return [...new Set(matches)].slice(0, 5);
   }
 }
-
-// 其他LLM提供商的实现可以在这里添加
-// 例如 AnthropicLLMService, LocalLLMService 等

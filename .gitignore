@@ -1,1 +1,16 @@
 node_modules/
+dist/
+build/
+*.AppImage
+*.snap
+*.deb
+*.rpm
+*.dmg
+*.exe
+builder-debug.yml
+builder-effective-config.yaml
+latest-linux.yml
+latest-mac.yml
+latest.yml
+.DS_Store
+*.log

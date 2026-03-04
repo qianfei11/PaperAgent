@@ -1,12 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ES2022",
-    "moduleResolution": "bundler",
-    "lib": [
-      "DOM",
-      "ES2022"
-    ],
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "lib": ["DOM", "ES2022"],
     "outDir": "./dist",
     "rootDir": "./src",
     "strict": true,
@@ -29,27 +26,12 @@
     "noImplicitOverride": true,
     "allowUnreachableCode": false,
     "allowUnusedLabels": false,
-    "baseUrl": ".",
-    "paths": {
-      "@/*": [
-        "src/*"
-      ],
-      "@shared/*": [
-        "src/shared/*"
-      ],
-      "@renderer/*": [
-        "src/renderer/*"
-      ]
-    }
+    "baseUrl": "."
   },
   "include": [
-    "src/renderer/**/*",
+    "src/main/**/*",
+    "src/preload/**/*",
     "src/shared/**/*"
   ],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "build",
-    "*.cjs"
-  ]
+  "exclude": ["node_modules", "dist"]
 }

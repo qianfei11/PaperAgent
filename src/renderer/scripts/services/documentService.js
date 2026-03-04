@@ -1,57 +1,91 @@
-class DefaultDocumentService {
-    async uploadDocument(file) {
-        console.log('Uploading document:', file.name);
-        const documentInfo = {
-            key: `doc_${Date.now()}`,
-            path: file.name,
-            type: this.getFileType(file.name),
-            title: file.name.replace(/\.[^/.]+$/, ""),
-            size: file.size,
-            uploadDate: new Date().toISOString(),
-            metadata: {},
-            contentPreview: `预览内容：这是${file.name}的预览...`,
+import { generateId, getCurrentTimestamp } from '../../../shared/utils';
+export class DefaultDocumentService {
+    async uploadDocument(filePath, onProgress) {
+        onProgress?.(10);
+        const fileName = filePath.split('/').pop() ?? filePath.split('\\').pop() ?? 'unknown';
+        const ext = fileName.split('.').pop()?.toLowerCase() ?? '';
+        const type = this.getFileType(ext);
+        const key = generateId();
+        onProgress?.(30);
+        let contentPreview = '';
+        let size = 0;
+        try {
+            const result = await this.processDocument(filePath);
+            if (result.success && result.text) {
+                contentPreview = result.text.substring(0, 500);
+                size = result.text.length;
+            }
+            onProgress?.(90);
+        }
+        catch (_e) {
+        }
+        onProgress?.(100);
+        return {
+            key,
+            path: filePath,
+            type,
+            title: fileName,
+            size,
+            uploadDate: getCurrentTimestamp(),
+            metadata: { extension: ext },
+            contentPreview,
             associatedEntities: []
         };
-        await new Promise(resolve => setTimeout(resolve, 500));
-        return documentInfo;
     }
     async processDocument(documentPath) {
-        console.log('Processing document:', documentPath);
-        return {
-            success: true,
-            message: '文档处理成功',
-            extractedContent: `从${documentPath}中提取的内容...`
-        };
+        const ext = documentPath.split('.').pop()?.toLowerCase() ?? '';
+        const type = this.getFileType(ext);
+        try {
+            let text = '';
+            if (type === 'pdf') {
+                text = await this.extractTextFromPDF(documentPath);
+            }
+            else if (type === 'image') {
+                text = await this.extractTextFromImage(documentPath);
+            }
+            return { success: true, text, metadata: { type, extractedAt: getCurrentTimestamp() } };
+        }
+        catch (error) {
+            return {
+                success: false,
+                text: '',
+                metadata: { error: error instanceof Error ? error.message : 'Unknown error' }
+            };
+        }
     }
     async extractTextFromPDF(filePath) {
-        console.log('Extracting text from PDF:', filePath);
-        return `从PDF ${filePath} 中提取的文本内容...`;
+        const result = await window.electronAPI.extractPDFText(filePath);
+        if (result.success)
+            return result.text;
+        throw new Error(result.message ?? 'PDF 文本提取失败');
     }
     async extractTextFromImage(filePath) {
-        console.log('Extracting text from image:', filePath);
-        return `从图像 ${filePath} 中识别的文本...`;
+        const result = await window.electronAPI.extractImageText(filePath);
+        if (result.success)
+            return result.text;
+        throw new Error(result.message ?? '图片 OCR 失败');
     }
-    async searchDocuments(query) {
-        console.log('Searching documents for:', query);
-        return [];
+    searchDocuments(query, documents) {
+        if (!query.trim())
+            return documents;
+        const q = query.toLowerCase();
+        return documents.filter(doc => doc.title.toLowerCase().includes(q) ||
+            doc.contentPreview.toLowerCase().includes(q) ||
+            doc.type.toLowerCase().includes(q));
     }
-    async getDocumentContent(documentId) {
-        console.log('Getting content for document:', documentId);
-        return `文档 ${documentId} 的内容...`;
+    getDocumentContent(document) {
+        return document.contentPreview;
     }
-    getFileType(fileName) {
-        const extension = fileName.split('.').pop()?.toLowerCase() || '';
-        const typeMap = {
-            'pdf': 'pdf',
-            'doc': 'doc',
-            'docx': 'docx',
-            'txt': 'txt',
-            'jpg': 'image',
-            'jpeg': 'image',
-            'png': 'image',
-            'gif': 'image'
-        };
-        return typeMap[extension] || 'unknown';
+    getFileType(ext) {
+        if (ext === 'pdf')
+            return 'pdf';
+        if (['doc', 'docx'].includes(ext))
+            return 'doc';
+        if (ext === 'txt')
+            return 'txt';
+        if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp'].includes(ext))
+            return 'image';
+        return 'unknown';
     }
 }
-//# sourceMappingURL=documentService.js.map;
+//# sourceMappingURL=documentService.js.map
