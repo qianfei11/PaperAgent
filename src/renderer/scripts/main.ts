@@ -20,6 +20,7 @@ declare global {
       extractPDFText: (path: string) => Promise<{ success: boolean; text: string; message?: string }>;
       extractImageText: (path: string) => Promise<{ success: boolean; text: string; message?: string }>;
       sendLLMMessage: (requestId: string, messages: Array<{ role: string; content: string }>, config: LLMProviderConfig) => void;
+      cancelLLMMessage: (requestId: string) => void;
       onLLMChunk: (cb: (data: { requestId: string; text: string }) => void) => void;
       onLLMDone: (cb: (data: { requestId: string }) => void) => void;
       onLLMError: (cb: (data: { requestId: string; error: string }) => void) => void;
@@ -36,7 +37,9 @@ class PaperAgentApp {
   private sessionHistoryContainer: HTMLElement | null = null;
   private messageInput: HTMLTextAreaElement | null = null;
   private sendButton: HTMLButtonElement | null = null;
+  private cancelButton: HTMLButtonElement | null = null;
   private sessionTitle: HTMLElement | null = null;
+  private cancelCurrentRequest: (() => void) | null = null;
 
   // 当前生效的 LLM 提供商配置，由设置页面更新
   private providerConfig: LLMProviderConfig = {
@@ -70,7 +73,15 @@ class PaperAgentApp {
     this.sessionHistoryContainer = document.getElementById('sessionHistoryContainer');
     this.messageInput = document.getElementById('messageInput') as HTMLTextAreaElement;
     this.sendButton = document.getElementById('sendBtn') as HTMLButtonElement;
+    this.cancelButton = document.getElementById('cancelBtn') as HTMLButtonElement;
     this.sessionTitle = document.getElementById('sessionTitle');
+
+    this.cancelButton?.addEventListener('click', () => {
+      if (this.cancelCurrentRequest) {
+        this.cancelCurrentRequest();
+        this.cancelCurrentRequest = null;
+      }
+    });
 
     // 顶部工具栏按钮
     document.getElementById('newSessionBtn')?.addEventListener('click', () => this.createNewSession());
@@ -83,6 +94,11 @@ class PaperAgentApp {
     this.wireSettingsModal();
 
     this.renderSessionHistory();
+
+    // 文档搜索
+    document.getElementById('documentSearch')?.addEventListener('input', (e) => {
+      this.filterDocuments((e.target as HTMLInputElement).value);
+    });
   }
 
   private setupEventListeners(): void {
@@ -256,15 +272,15 @@ class PaperAgentApp {
       const messages = this.llmService.buildMessages(context, message);
 
       await new Promise<void>((resolve, reject) => {
-        this.llmService.sendMessageStreaming(
+        this.cancelCurrentRequest = this.llmService.sendMessageStreaming(
           messages,
           this.providerConfig,
           (chunk) => {
             this.appendToStreamingMessage(assistantEl, chunk);
           },
           async (fullText) => {
+            this.cancelCurrentRequest = null;
             this.finalizeStreamingMessage(assistantEl);
-            // 流结束后更新上下文（串行执行，避免并发写入冲突）
             try {
               this.sessionData = await this.contextService.updateContext(
                 this.sessionData!,
@@ -278,9 +294,15 @@ class PaperAgentApp {
             resolve();
           },
           (error) => {
-            this.finalizeStreamingMessage(assistantEl, true);
-            this.showNotification(`LLM 响应错误: ${error}`, 'error');
-            reject(new Error(error));
+            this.cancelCurrentRequest = null;
+            const cancelled = error === '已取消';
+            this.finalizeStreamingMessage(assistantEl, !cancelled);
+            if (!cancelled) {
+              this.showNotification(`LLM 响应错误: ${error}`, 'error');
+              reject(new Error(error));
+            } else {
+              resolve();
+            }
           }
         );
       });
@@ -293,9 +315,13 @@ class PaperAgentApp {
   }
 
   private setSendingState(sending: boolean): void {
-    if (!this.sendButton) return;
-    this.sendButton.disabled = sending;
-    this.sendButton.classList.toggle('loading', sending);
+    if (this.sendButton) {
+      this.sendButton.disabled = sending;
+      this.sendButton.classList.toggle('loading', sending);
+    }
+    if (this.cancelButton) {
+      this.cancelButton.style.display = sending ? '' : 'none';
+    }
   }
 
   private createStreamingMessageElement(): HTMLElement {
@@ -376,6 +402,12 @@ class PaperAgentApp {
     document.getElementById('testConnectionBtn')?.addEventListener('click', () => this.testConnection());
     document.getElementById('settingsModal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.closeSettings();
+    });
+
+    // 文档查看器 Modal
+    document.getElementById('closeDocViewerBtn')?.addEventListener('click', () => this.closeDocumentViewer());
+    document.getElementById('docViewerModal')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) this.closeDocumentViewer();
     });
   }
 
@@ -550,29 +582,84 @@ class PaperAgentApp {
     for (const doc of this.sessionData.documentLibrary.documents) {
       const div = document.createElement('div');
       div.classList.add('document-item');
+      div.dataset['docKey'] = doc.key;
+
+      const header = document.createElement('div');
+      header.classList.add('document-item-header');
 
       const title = document.createElement('div');
       title.classList.add('document-item-title');
       title.textContent = doc.title || doc.path.split('/').pop() || '未知文档';
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.classList.add('delete-doc-btn');
+      deleteBtn.textContent = '✕';
+      deleteBtn.title = '移除文档';
+      deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        this.deleteDocument(doc.key);
+      });
+
+      header.appendChild(title);
+      header.appendChild(deleteBtn);
 
       const meta = document.createElement('div');
       meta.classList.add('document-item-meta');
       const sizeKb = doc.size > 0 ? `${Math.round(doc.size / 1024)} KB` : '未知大小';
       meta.textContent = `${doc.type.toUpperCase()} • ${sizeKb} • ${new Date(doc.uploadDate).toLocaleDateString()}`;
 
-      div.appendChild(title);
+      div.appendChild(header);
       div.appendChild(meta);
 
       if (doc.contentPreview) {
         const preview = document.createElement('div');
         preview.classList.add('document-item-preview');
-        preview.style.cssText = 'font-size:0.8em;color:#6b7280;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
         preview.textContent = doc.contentPreview.substring(0, 80);
         div.appendChild(preview);
       }
 
+      // 点击文档项查看全文
+      div.addEventListener('click', () => this.showDocumentViewer(doc));
+
       this.documentContainer.appendChild(div);
     }
+  }
+
+  private deleteDocument(key: string): void {
+    if (!this.sessionData) return;
+    this.sessionData.documentLibrary.documents = this.sessionData.documentLibrary.documents.filter(d => d.key !== key);
+    this.sessionData.metadata.documentsCount = this.sessionData.documentLibrary.documents.length;
+    this.renderDocuments();
+    this.showNotification('文档已移除', 'success');
+  }
+
+  private showDocumentViewer(doc: import('../../shared/types.js').DocumentInfo): void {
+    const modal = document.getElementById('docViewerModal');
+    const titleEl = document.getElementById('docViewerTitle');
+    const contentEl = document.getElementById('docViewerContent');
+    if (!modal || !titleEl || !contentEl) return;
+
+    titleEl.textContent = doc.title || doc.path.split('/').pop() || '未知文档';
+    const text = doc.fullContent || doc.contentPreview;
+    contentEl.textContent = text || '（未提取到文本内容）';
+    modal.style.display = 'flex';
+  }
+
+  private closeDocumentViewer(): void {
+    const modal = document.getElementById('docViewerModal');
+    if (modal) modal.style.display = 'none';
+  }
+
+  private filterDocuments(query: string): void {
+    if (!this.documentContainer || !this.sessionData) return;
+    const matched = this.contextService.getDocumentService()
+      .searchDocuments(query, this.sessionData.documentLibrary.documents);
+    const matchedKeys = new Set(matched.map(d => d.key));
+
+    this.documentContainer.querySelectorAll<HTMLElement>('.document-item').forEach(item => {
+      const key = item.dataset['docKey'];
+      item.style.display = (!query.trim() || (key !== undefined && matchedKeys.has(key))) ? '' : 'none';
+    });
   }
 
   private clearChat(): void {
@@ -622,7 +709,10 @@ class PaperAgentApp {
         <div class="session-item" data-session-id="${s.id}">
           <div class="session-header">
             <h4>${s.title}</h4>
-            <button class="load-session-btn" data-session-id="${s.id}">加载</button>
+            <div class="session-actions">
+              <button class="load-session-btn" data-session-id="${s.id}">加载</button>
+              <button class="delete-session-btn" data-session-id="${s.id}">删除</button>
+            </div>
           </div>
           <div class="session-info">
             <p>${s.description || '无描述'}</p>
@@ -632,13 +722,42 @@ class PaperAgentApp {
 
       this.sessionHistoryContainer.querySelectorAll('.load-session-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
+          e.stopPropagation();
           const sessionId = (e.target as HTMLElement).dataset['sessionId'];
           if (sessionId) this.loadSessionById(sessionId);
+        });
+      });
+
+      this.sessionHistoryContainer.querySelectorAll('.delete-session-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const sessionId = (e.target as HTMLElement).dataset['sessionId'];
+          if (sessionId) this.deleteSessionById(sessionId);
         });
       });
     } catch (e) {
       console.error('渲染会话历史失败:', e);
       this.sessionHistoryContainer.innerHTML = '<p>加载历史时出错</p>';
+    }
+  }
+
+  private deleteSessionById(sessionId: string): void {
+    if (!confirm('确定要从历史列表移除这个会话吗？（不会删除文件）')) return;
+    try {
+      const sessions: Array<{ id: string }> = JSON.parse(localStorage.getItem('paperAgentSessions') ?? '[]');
+      localStorage.setItem('paperAgentSessions', JSON.stringify(sessions.filter(s => s.id !== sessionId)));
+      if (this.sessionData?.sessionId === sessionId) {
+        this.sessionData = null;
+        this.updateSessionTitle('无活动会话');
+        this.clearChat();
+        if (this.outlineContainer) this.outlineContainer.innerHTML = '';
+        if (this.documentContainer) this.documentContainer.innerHTML = '';
+      }
+      this.renderSessionHistory();
+      this.showNotification('会话已从历史中移除', 'success');
+    } catch (e) {
+      console.error(e);
+      this.showNotification('删除失败', 'error');
     }
   }
 

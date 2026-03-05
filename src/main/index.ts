@@ -153,21 +153,29 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('extract-image-text', async (_event, filePath: string) => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createWorker } = require('tesseract.js');
+      let worker: { recognize: (p: string) => Promise<{ data: { text: string } }>; terminate: () => Promise<void> } | null = null;
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { createWorker } = require('tesseract.js');
-        const worker = await createWorker(['chi_sim', 'eng']);
-        const { data: { text } } = await worker.recognize(filePath);
-        await worker.terminate();
+        worker = await createWorker(['chi_sim', 'eng']);
+        const { data: { text } } = await worker!.recognize(filePath);
         return { success: true, text: text.trim() };
       } catch (error) {
         return { success: false, text: '', message: error instanceof Error ? error.message : 'Unknown error' };
+      } finally {
+        if (worker) {
+          worker.terminate().catch(() => { /* 忽略清理错误 */ });
+        }
       }
     });
 
     // ── LLM Streaming Proxy ──────────────────────────────────────────────────
     // 使用 ipcMain.on（非 handle）是因为需要向渲染器推送多条消息（流式）
     // 协议：llm-send-message → [llm-chunk*] → llm-done | llm-error
+    // 取消协议：llm-cancel-message(requestId) → 中止对应请求
+
+    // 存储进行中的请求（requestId → AbortController）
+    const pendingRequests = new Map<string, AbortController>();
 
     /**
      * 解析单行 SSE 数据，提取文本内容并通过回调返回。
@@ -194,12 +202,14 @@ if (!gotTheLock) {
 
     /**
      * 为 axios 流建立 SSE 监听，将 chunk/done/error 事件转发给渲染器。
+     * onComplete 在流结束或报错后调用，用于清理 pendingRequests。
      */
     function pipeStream(
       stream: NodeJS.ReadableStream,
       isAnthropic: boolean,
       send: (event: string, data: object) => void,
-      requestId: string
+      requestId: string,
+      onComplete: () => void
     ): void {
       let buffer = '';
       stream.on('data', (chunk: Buffer) => {
@@ -210,8 +220,14 @@ if (!gotTheLock) {
           parseSseLine(line, isAnthropic, (text) => send('llm-chunk', { requestId, text }));
         }
       });
-      stream.on('end', () => send('llm-done', { requestId }));
-      stream.on('error', (err: Error) => send('llm-error', { requestId, error: err.message }));
+      stream.on('end', () => { onComplete(); send('llm-done', { requestId }); });
+      stream.on('error', (err: Error) => {
+        onComplete();
+        // axios CanceledError 时不发送错误（渲染端已处理取消）
+        if ((err as NodeJS.ErrnoException).code !== 'ERR_CANCELED') {
+          send('llm-error', { requestId, error: err.message });
+        }
+      });
     }
 
     ipcMain.on('llm-send-message', async (event, payload: {
@@ -221,6 +237,9 @@ if (!gotTheLock) {
     }) => {
       const { requestId, messages, config } = payload;
       const send = (ch: string, data: object) => event.sender.send(ch, data);
+      const controller = new AbortController();
+      pendingRequests.set(requestId, controller);
+      const cleanup = () => pendingRequests.delete(requestId);
 
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -248,10 +267,11 @@ if (!gotTheLock) {
                 'anthropic-version': '2023-06-01',
                 'content-type': 'application/json'
               },
-              responseType: 'stream'
+              responseType: 'stream',
+              signal: controller.signal
             }
           );
-          pipeStream(response.data, true, send, requestId);
+          pipeStream(response.data, true, send, requestId, cleanup);
 
         } else {
           // ── OpenAI 兼容 Chat Completions API ──────────────────────────────
@@ -270,14 +290,28 @@ if (!gotTheLock) {
                 'Authorization': `Bearer ${config.apiKey}`,
                 'Content-Type': 'application/json'
               },
-              responseType: 'stream'
+              responseType: 'stream',
+              signal: controller.signal
             }
           );
-          pipeStream(response.data, false, send, requestId);
+          pipeStream(response.data, false, send, requestId, cleanup);
         }
 
       } catch (error) {
-        send('llm-error', { requestId, error: error instanceof Error ? error.message : 'Unknown error' });
+        cleanup();
+        const axiosError = error as { code?: string; message?: string };
+        // 忽略主动取消产生的错误
+        if (axiosError.code !== 'ERR_CANCELED') {
+          send('llm-error', { requestId, error: axiosError.message ?? 'Unknown error' });
+        }
+      }
+    });
+
+    ipcMain.on('llm-cancel-message', (_event, requestId: string) => {
+      const controller = pendingRequests.get(requestId);
+      if (controller) {
+        controller.abort();
+        pendingRequests.delete(requestId);
       }
     });
 

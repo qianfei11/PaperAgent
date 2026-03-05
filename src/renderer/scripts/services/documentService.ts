@@ -23,6 +23,24 @@ declare const window: Window & {
 
 export class DefaultDocumentService implements DocumentService {
 
+  // ── localStorage 缓存键前缀 ────────────────────────────────────────────────
+  private static readonly CACHE_PREFIX = 'pa_doc_';
+
+  private getFromCache(filePath: string): string | null {
+    try {
+      return localStorage.getItem(DefaultDocumentService.CACHE_PREFIX + filePath);
+    } catch (_e) { return null; }
+  }
+
+  private saveToCache(filePath: string, text: string): void {
+    try {
+      // 只缓存不超过 2MB 的文本，避免撑满 localStorage
+      if (text.length < 2 * 1024 * 1024) {
+        localStorage.setItem(DefaultDocumentService.CACHE_PREFIX + filePath, text);
+      }
+    } catch (_e) { /* 存储已满时静默忽略 */ }
+  }
+
   async uploadDocument(filePath: string, onProgress?: (progress: number) => void): Promise<DocumentInfo> {
     onProgress?.(10);
 
@@ -34,13 +52,24 @@ export class DefaultDocumentService implements DocumentService {
     onProgress?.(30);
 
     let contentPreview = '';
+    let fullContent: string | undefined;
     let size = 0;
 
     try {
-      const result = await this.processDocument(filePath);
-      if (result.success && result.text) {
-        contentPreview = result.text.substring(0, 500);
-        size = result.text.length;
+      // 优先读缓存，避免重复 PDF/OCR 提取
+      const cached = this.getFromCache(filePath);
+      if (cached !== null) {
+        fullContent = cached;
+      } else {
+        const result = await this.processDocument(filePath);
+        if (result.success && result.text) {
+          fullContent = result.text;
+          this.saveToCache(filePath, fullContent);
+        }
+      }
+      if (fullContent) {
+        contentPreview = fullContent.substring(0, 500);
+        size = fullContent.length;
       }
       onProgress?.(90);
     } catch (_e) {
@@ -58,6 +87,7 @@ export class DefaultDocumentService implements DocumentService {
       uploadDate: getCurrentTimestamp(),
       metadata: { extension: ext },
       contentPreview,
+      fullContent,
       associatedEntities: []
     };
   }
@@ -99,15 +129,17 @@ export class DefaultDocumentService implements DocumentService {
   searchDocuments(query: string, documents: DocumentInfo[]): DocumentInfo[] {
     if (!query.trim()) return documents;
     const q = query.toLowerCase();
-    return documents.filter(doc =>
-      doc.title.toLowerCase().includes(q) ||
-      doc.contentPreview.toLowerCase().includes(q) ||
-      doc.type.toLowerCase().includes(q)
-    );
+    return documents.filter(doc => {
+      if (doc.title.toLowerCase().includes(q)) return true;
+      if (doc.type.toLowerCase().includes(q)) return true;
+      // 优先搜索全文，其次搜索预览
+      const content = (doc.fullContent ?? doc.contentPreview).toLowerCase();
+      return content.includes(q);
+    });
   }
 
   getDocumentContent(document: DocumentInfo): string {
-    return document.contentPreview;
+    return document.fullContent ?? document.contentPreview;
   }
 
   private getFileType(ext: string): string {

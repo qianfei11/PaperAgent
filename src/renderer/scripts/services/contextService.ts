@@ -45,7 +45,8 @@ export class ContextService {
     updatedSession.entitiesMap = this.updateEntitiesMap(
       updatedSession.entitiesMap,
       entities,
-      lastOutlineId
+      lastOutlineId,
+      combinedText
     );
 
     updatedSession.metadata.totalMessages += 2;
@@ -181,11 +182,13 @@ export class ContextService {
 
   /**
    * 将新识别的实体追加到实体图谱，记录其出现位置（outlineId 为字符串型大纲条目 ID）。
+   * contextText 为该轮对话的原始文本，用于提取实体周边的上下文片段。
    */
   private updateEntitiesMap(
     entitiesMap: Record<string, EntityMapping>,
     newEntities: string[],
-    outlineId: string
+    outlineId: string,
+    contextText: string
   ): Record<string, EntityMapping> {
     const updatedMap = { ...entitiesMap };
     const timestamp = new Date().toISOString();
@@ -199,9 +202,14 @@ export class ContextService {
           occurrences: []
         };
       }
+      // 提取实体周边 40 字符作为上下文片段，找不到时取文本开头
+      const idx = contextText.toLowerCase().indexOf(entity.toLowerCase());
+      const snippet = idx !== -1
+        ? contextText.substring(Math.max(0, idx - 30), Math.min(contextText.length, idx + entity.length + 50)).trim()
+        : contextText.substring(0, 80).trim();
       updatedMap[entity]!.occurrences.push({
         outlineId,
-        context: 'context placeholder',
+        context: snippet,
         timestamp
       });
     }

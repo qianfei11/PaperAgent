@@ -35,6 +35,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('llm-done', (_event, data) => cb(data)),
   onLLMError: (cb: (data: { requestId: string; error: string }) => void) =>
     ipcRenderer.on('llm-error', (_event, data) => cb(data)),
+  cancelLLMMessage: (requestId: string) => ipcRenderer.send('llm-cancel-message', requestId),
   removeLLMListeners: () => {
     ipcRenderer.removeAllListeners('llm-chunk');
     ipcRenderer.removeAllListeners('llm-done');

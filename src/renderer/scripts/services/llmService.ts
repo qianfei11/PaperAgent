@@ -16,6 +16,7 @@ type ErrorCallback = (error: string) => void;
 declare const window: Window & {
   electronAPI: {
     sendLLMMessage: (requestId: string, messages: Array<{ role: string; content: string }>, config: LLMProviderConfig) => void;
+    cancelLLMMessage: (requestId: string) => void;
     onLLMChunk: (cb: (data: { requestId: string; text: string }) => void) => void;
     onLLMDone: (cb: (data: { requestId: string }) => void) => void;
     onLLMError: (cb: (data: { requestId: string; error: string }) => void) => void;
@@ -44,42 +45,71 @@ export class OpenAILLMService implements LLMService {
   }
 
   /**
-   * 流式发送消息，通过回调函数逐块返回文本
+   * 流式发送消息，通过回调函数逐块返回文本。
+   * @param timeoutMs 超时时间（毫秒），默认 90 秒；连接建立后每收到 chunk 重置计时。
+   * @returns cancel 函数，调用后立即中止请求并触发 onError（'已取消'）。
    */
   sendMessageStreaming(
     messages: Array<{ role: string; content: string }>,
     config: LLMProviderConfig,
     onChunk: ChunkCallback,
     onDone: DoneCallback,
-    onError: ErrorCallback
-  ): void {
-    const requestId = Date.now().toString();
+    onError: ErrorCallback,
+    timeoutMs = 90_000
+  ): () => void {
+    const requestId = crypto.randomUUID();
     let fullText = '';
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    let settled = false;
+
+    const resetTimeout = () => {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      timeoutHandle = setTimeout(() => {
+        if (!settled) cancel('请求超时，请检查网络或重试');
+      }, timeoutMs);
+    };
+
+    const cancel = (reason = '已取消') => {
+      if (settled) return;
+      settled = true;
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      window.electronAPI.removeLLMListeners();
+      window.electronAPI.cancelLLMMessage(requestId);
+      onError(reason);
+    };
 
     window.electronAPI.removeLLMListeners();
 
     window.electronAPI.onLLMChunk((data) => {
-      if (data.requestId === requestId) {
+      if (data.requestId === requestId && !settled) {
+        resetTimeout();
         fullText += data.text;
         onChunk(data.text);
       }
     });
 
     window.electronAPI.onLLMDone((data) => {
-      if (data.requestId === requestId) {
+      if (data.requestId === requestId && !settled) {
+        settled = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         window.electronAPI.removeLLMListeners();
         onDone(fullText);
       }
     });
 
     window.electronAPI.onLLMError((data) => {
-      if (data.requestId === requestId) {
+      if (data.requestId === requestId && !settled) {
+        settled = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
         window.electronAPI.removeLLMListeners();
         onError(data.error);
       }
     });
 
+    resetTimeout();
     window.electronAPI.sendLLMMessage(requestId, messages, config);
+
+    return () => cancel();
   }
 
   /**
@@ -88,7 +118,7 @@ export class OpenAILLMService implements LLMService {
   private async sendOnce(messages: Array<{ role: string; content: string }>): Promise<string> {
     if (!this.providerConfig) throw new Error('LLM 未配置，请先在设置中填写 API 信息');
     return new Promise<string>((resolve, reject) => {
-      this.sendMessageStreaming(messages, this.providerConfig!, () => { /* no-op */ }, resolve, reject);
+      this.sendMessageStreaming(messages, this.providerConfig!, () => { /* no-op */ }, resolve, (e) => reject(new Error(e)));
     });
   }
 
@@ -96,7 +126,7 @@ export class OpenAILLMService implements LLMService {
     const messages = this.buildMessages(context, userMessage);
     if (!this.providerConfig) throw new Error('LLM 未配置');
     return new Promise<string>((resolve, reject) => {
-      this.sendMessageStreaming(messages, this.providerConfig!, () => { /* no-op */ }, resolve, reject);
+      this.sendMessageStreaming(messages, this.providerConfig!, () => { /* no-op */ }, resolve, (e) => reject(new Error(e)));
     });
   }
 

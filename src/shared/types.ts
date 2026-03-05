@@ -55,6 +55,8 @@ export interface DocumentInfo {
   uploadDate: string;
   metadata: Record<string, unknown>;
   contentPreview: string;
+  /** 提取的完整文本内容（可选，大文档可能不存储） */
+  fullContent?: string;
   associatedEntities: string[];
 }
 
