@@ -1,7 +1,7 @@
-# 使用官方Node.js运行时作为基础镜像
+# Use the official Node.js runtime as the base image.
 FROM node:18-bullseye
 
-# 安装Electron所需的系统依赖
+# Install the system dependencies required by Electron.
 RUN apt-get update && \
     apt-get install -y \
     libgtk-3-dev \
@@ -32,30 +32,30 @@ RUN apt-get update && \
     libgbm1 && \
     rm -rf /var/lib/apt/lists/*
 
-# 设置工作目录
+# Set the working directory.
 WORKDIR /usr/src/app
 
-# 复制package.json和package-lock.json（如果存在）
+# Copy package.json and package-lock.json if present.
 COPY package*.json ./
 
-# 复制依赖安装脚本
+# Copy the dependency installation script.
 COPY install-deps.sh ./
 RUN chmod +x install-deps.sh
 
-# 安装项目依赖
+# Install project dependencies.
 RUN ./install-deps.sh
 
-# 如果是生产环境，可以使用下面的命令来仅安装生产依赖
+# For production-only installs, use the command below instead.
 # RUN npm ci --only=production
 
-# 复制源代码到工作目录
+# Copy the source tree into the image.
 COPY . .
 
-# 编译TypeScript代码
+# Compile the TypeScript sources.
 RUN npm run compile
 
-# 暴露应用运行的端口（如果有的话）
+# Expose the application port if needed.
 EXPOSE 3000
 
-# 启动应用的命令
+# Start the application.
 CMD [ "npm", "start" ]

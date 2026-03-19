@@ -1,104 +1,154 @@
 # PaperAgent
 
-用于学术论文阅读辅助的 LLM 交互桌面应用。通过自动维护**对话大纲**和**实体图谱**，解决长对话中上下文漂移问题；支持 PDF / 图片文档关联，让 LLM 基于实际材料作答。
+PaperAgent is an Electron desktop app for research-oriented LLM conversations. It keeps a lightweight session outline, stores document context, and lets you continue long-running discussions without losing track of the material you already explored.
 
-## 特性
+## What It Does
 
-- **流式对话**：实时显示 LLM 响应（打字机效果），支持 OpenAI 兼容接口与 Anthropic Claude
-- **自动上下文管理**：每轮对话后自动提取要点与实体，增量更新知识大纲
-- **文档库**：支持 PDF（pdfjs）和图片（Tesseract OCR）文本提取，提取内容自动注入上下文
-- **会话持久化**：会话以 JSON 格式保存到本地，可随时加载恢复
-- **灵活配置**：内置设置界面，支持自定义 Base URL、API Key、模型、温度等参数
+- Streams model responses in the desktop UI
+- Supports OpenAI-compatible APIs and Anthropic Claude
+- Persists sessions automatically and lets you export or import them as JSON
+- Extracts text from PDFs and images, then keeps those documents attached to the active session
+- Maintains a session outline and entity map after each turn
+- Renders assistant responses as Markdown
+- Lets you rename sessions, browse session history, and collapse side panels
 
-## 支持的 LLM 提供商
+## Current UI
 
-| Provider | 说明 |
-|---|---|
-| OpenAI | `https://api.openai.com` |
-| DeepSeek | 填入 `https://api.deepseek.com` |
-| Ollama | 填入本地地址，如 `http://localhost:11434` |
-| Anthropic Claude | 选择 Anthropic 模式，填入 API Key |
-| 其他 OpenAI 兼容服务 | 填入对应 Base URL |
+The app uses a three-panel layout:
 
-## 项目结构
+- Left: session history
+- Center-left: session outline
+- Center: chat area
+- Right: document library
 
-```
+All three side panels are foldable. Session cards in the history panel are clickable and load the related session directly.
+
+## Supported Providers
+
+| Provider | Base URL Behavior |
+| --- | --- |
+| OpenAI | Enter `https://api.openai.com/v1` |
+| DeepSeek | Enter `https://api.deepseek.com` or `https://api.deepseek.com/v1`, depending on the endpoint you want to use |
+| Ollama | Enter your local endpoint, for example `http://localhost:11434/v1` if your proxy exposes OpenAI-style routes |
+| Anthropic | Select `Anthropic` and provide an API key |
+| Other OpenAI-compatible services | Enter the exact base URL your provider expects |
+
+For OpenAI-compatible providers, PaperAgent uses the Base URL literally. If your provider requires `/v1`, include `/v1` yourself.
+
+## Session Storage
+
+PaperAgent stores session data in two places:
+
+- Autosaved session snapshots: `app.getPath('userData')/sessions/<sessionId>.json`
+- Session history index in the renderer: `localStorage['paperAgentSessions']`
+
+Configuration is stored at `app.getPath('userData')/config.json`.
+
+On Linux, Electron typically resolves `userData` to `~/.config/PaperAgent/`.
+
+## Project Structure
+
+```text
 src/
 ├── main/
-│   ├── index.ts          # 主进程：IPC 处理、LLM 代理、文件 I/O
-│   └── mainWindow.ts     # 窗口创建与配置
+│   ├── index.ts
+│   └── mainWindow.ts
 ├── preload/
-│   └── index.ts          # contextBridge：向渲染器暴露受控 API
+│   └── index.ts
 ├── renderer/
-│   ├── index.html        # 三栏布局主界面
-│   ├── styles/main.css   # 样式
+│   ├── index.html
+│   ├── styles/main.css
 │   └── scripts/
-│       ├── main.ts       # 渲染进程入口，协调各服务
+│       ├── main.ts
 │       ├── components/
-│       │   ├── outlineComponent.js   # 大纲树组件
-│       │   └── sessionManager.js     # 会话历史组件
+│       │   ├── outlineComponent.ts
+│       │   └── sessionManager.ts
 │       └── services/
-│           ├── llmService.ts         # LLM 流式请求封装
-│           ├── documentService.ts    # 文档上传与文本提取
-│           └── contextService.ts     # 上下文管理（大纲 + 实体图谱）
+│           ├── contextService.ts
+│           ├── documentService.ts
+│           └── llmService.ts
 └── shared/
-    ├── types.ts           # 全进程共享类型定义
-    └── utils.ts           # 工具函数（ID 生成、时间戳等）
+    ├── types.ts
+    └── utils.ts
 ```
 
-## 安装与运行
+The repository also keeps JavaScript mirror files under `src/renderer/scripts/` because this project still carries a direct JS copy of some renderer modules alongside the TypeScript sources.
+
+## Local Development
+
+Install dependencies:
 
 ```bash
-# 安装依赖
 npm install
+```
 
-# 开发模式（热重载）
+Run in development mode:
+
+```bash
 npm run dev
-
-# 仅编译 TypeScript
-./node_modules/.bin/tsc && node copy-js.cjs
-
-# 打包发布
-npm run build
 ```
 
-## 首次使用
+Compile without packaging:
 
-1. 启动应用后，点击右上角 **⚙ 设置**
-2. 选择 Provider，填入 Base URL（OpenAI 兼容）和 API Key，选择模型
-3. 点击 **测试连接** 确认配置有效，保存
-4. 点击 **新建会话** 开始对话
-5. 可通过右侧 **文档库** 添加 PDF 或图片，内容会自动提取并加入上下文
-
-## 架构说明
-
-### IPC 通信模型
-
-```
-渲染进程 ──ipcRenderer.send('llm-send-message')──► 主进程（axios 流式请求 LLM API）
-         ◄─── ipcMain.send('llm-chunk') ×N ────────
-         ◄─── ipcMain.send('llm-done') ────────────
+```bash
+npm run compile
 ```
 
-- LLM 请求通过主进程代理，绕过渲染器的 CORS 限制
-- 使用 `ipcMain.on`（非 handle）是因为需要推送多条消息
-- PDF/OCR 在主进程执行（Node.js 环境），结果通过 handle 返回
+Build platform packages:
 
-### 上下文更新流程
-
-```
-用户发送消息
-   └─► buildMessages()   构建含大纲/文档摘要的 system prompt
-   └─► 流式获取 LLM 响应
-   └─► updateContext()
-         ├─ 追加对话历史
-         ├─ LLM 提取要点 & 实体（失败则降级为正则）
-         ├─ 更新大纲（Jaccard 相似度 > 0.7 则合并，否则新建条目）
-         └─ 更新实体图谱（记录实体 → 大纲条目的映射）
+```bash
+npm run build:linux
+npm run build:win
+npm run build:mac
 ```
 
-## 开发说明
+Electron Builder writes release artifacts to `release/`.
 
-- 项目使用 `tsc` 直接输出 ES2020 模块，**不使用打包工具**（webpack/vite）
-- `copy-js.cjs` 将预编译的 JS 组件文件复制到 `dist/` 目录
-- PDF 和 OCR 依赖必须在主进程通过 `require()` 动态加载
+## Packaging Notes
+
+- Linux packages are wrapped to launch with `--no-sandbox`
+- PDF extraction uses `pdfjs-dist/build/pdf.js` and bundled standard fonts
+- The app does not rely on the optional native `canvas` dependency at runtime
+- Packaging disables native dependency rebuilds to keep GitHub Actions builds portable across Linux, Windows, and macOS
+
+## GitHub Releases
+
+The repository includes a release workflow at `.github/workflows/release.yml`.
+
+- Pushing a tag that matches `v*` publishes a GitHub release
+- The workflow builds Windows, macOS, and Linux binaries
+- Release assets are uploaded automatically to the matching GitHub release
+
+## Architecture Summary
+
+### Main Process
+
+- Creates the Electron window
+- Handles file dialogs
+- Saves and loads sessions
+- Extracts PDF and OCR text
+- Proxies streaming LLM requests
+
+### Renderer
+
+- Owns the chat UI
+- Manages session history and session title editing
+- Renders Markdown responses
+- Updates the outline and document panels
+- Persists session history metadata to localStorage
+
+### Context Flow
+
+1. The user sends a message
+2. The renderer builds a prompt from the current outline, documents, and recent history
+3. The main process streams the provider response back to the renderer
+4. The renderer updates the conversation history
+5. The context service extracts key points and entities
+6. The outline and entity map are updated
+7. The session snapshot is autosaved
+
+## Known Limits
+
+- The Markdown renderer is lightweight and intentionally not a full CommonMark implementation
+- The session history index is stored in localStorage, so deleting browser storage resets the visible history list
+- Linux may still print upstream Electron and input-method warnings that do not affect app behavior

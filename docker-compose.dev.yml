@@ -5,18 +5,18 @@ services:
     build: .
     container_name: paper-agent-dev
     volumes:
-      # 挂载项目源码，便于开发时实时更新（排除node_modules以避免Windows符号链接问题）
+      # Mount the project source for live development updates, while avoiding Windows symlink issues with node_modules.
       - .:/usr/src/app
-      - /usr/src/app/node_modules  # 声明匿名卷来存放node_modules
+      - /usr/src/app/node_modules  # Keep node_modules in an anonymous volume.
     working_dir: /usr/src/app
     stdin_open: true  # equivalent to docker run -i
     tty: true         # equivalent to docker run -t
-    # 默认运行开发服务器，但可以通过命令覆盖
+    # Run the default development command, unless overridden.
     command: sh -c "npm install && npm run watch"
     environment:
       - NODE_ENV=development
       - ELECTRON_IS_DEV=1
-    # 如果需要运行Electron GUI，可能需要以下设置（Linux系统）
+    # If you need to run the Electron GUI on Linux, the settings below may help.
     # devices:
     #   - /dev/dri:/dev/dri
     # security_opt:

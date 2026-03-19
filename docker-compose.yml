@@ -4,24 +4,24 @@ services:
   paper-agent-dev:
     build: .
     container_name: paper-agent-dev
-    # Electron应用通常不需要暴露端口，但如果需要Web界面则可以启用
+    # Electron apps usually do not need a published port, but you can enable one for a web UI.
     # ports:
     #   - "3000:3000"
     volumes:
-      # 挂载项目源码，便于开发时实时更新
+      # Mount the project source for live development updates.
       - .:/usr/src/app
-      # 挂载node_modules到容器内，避免覆盖本地的node_modules
+      # Mount node_modules inside the container so the local copy is not overwritten.
       - ./node_modules:/usr/src/app/node_modules
     working_dir: /usr/src/app
     stdin_open: true  # equivalent to docker run -i
     tty: true         # equivalent to docker run -t
-    # 为了开发目的，启动编译监视和开发服务器
+    # For development, start the compiler watcher and the dev app together.
     command: sh -c "npm run watch & npm run dev"
     environment:
       - NODE_ENV=development
       - ELECTRON_IS_DEV=1
-      # 如果需要显示GUI，可能需要额外的环境变量
+      # If you need GUI display forwarding, add the relevant environment variables here.
       # - DISPLAY=$DISPLAY
       # - DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-    # 如果需要访问X11显示服务器（对于GUI应用）
+    # If the container needs X11 access for GUI rendering:
     # network_mode: host
