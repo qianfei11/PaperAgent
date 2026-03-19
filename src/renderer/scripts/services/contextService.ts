@@ -1,6 +1,6 @@
 // src/renderer/scripts/services/contextService.ts
-// 负责维护会话上下文：对话历史、知识大纲、实体图谱。
-// 每次对话结束后，调用 updateContext() 将新内容增量合并到 SessionData。
+// Maintains session context: conversation history, knowledge outline, and entity graph.
+// After each conversation turn, updateContext() incrementally merges the new content into SessionData.
 
 import type { SessionData, Context, OutlineItem, EntityMapping } from '../../../shared/types.js';
 import { DefaultDocumentService } from './documentService.js';
@@ -16,8 +16,8 @@ export class ContextService {
   }
 
   /**
-   * 一次对话轮次结束后调用，返回更新后的 SessionData（不可变风格，不修改入参）。
-   * 流程：追加对话历史 → 提取要点与实体 → 更新大纲 → 更新实体图谱
+   * Called after a conversation turn finishes and returns an updated SessionData object.
+   * Flow: append conversation history -> extract key points and entities -> update outline -> update entity graph.
    */
   async updateContext(
     sessionData: SessionData,
@@ -40,7 +40,7 @@ export class ContextService {
       entities
     );
 
-    // 使用大纲最后一项的真实 ID（字符串），而非数组索引
+    // Use the actual ID of the last outline item, not the array index.
     const lastOutlineId = updatedSession.outline[updatedSession.outline.length - 1]?.id ?? '0';
     updatedSession.entitiesMap = this.updateEntitiesMap(
       updatedSession.entitiesMap,
@@ -56,8 +56,8 @@ export class ContextService {
   }
 
   /**
-   * 追加用户和助手消息到对话历史。
-   * 返回新对象（浅拷贝 + 独立的 conversationHistory 数组），不修改原 sessionData。
+   * Appends the user and assistant messages to conversation history.
+   * Returns a new object without mutating the original sessionData.
    */
   private updateConversationHistory(
     sessionData: SessionData,
@@ -113,7 +113,8 @@ export class ContextService {
   }
 
   /**
-   * 更新大纲：若已有相似主题的条目（Jaccard 相似度 > 0.7）则更新，否则新建条目。
+   * Updates the outline. If a similar topic exists (Jaccard similarity > 0.7), it is updated;
+   * otherwise a new top-level item is created.
    */
   private async updateOutline(
     outline: OutlineItem[],
@@ -162,7 +163,7 @@ export class ContextService {
     return [...outline, newItem];
   }
 
-  /** 基于词集合的 Jaccard 相似度，用于判断话题重叠程度 */
+  /** Jaccard similarity over token sets, used to estimate topic overlap. */
   private calculateSimilarity(str1: string, str2: string): number {
     const s1 = str1.toLowerCase().trim();
     const s2 = str2.toLowerCase().trim();
@@ -174,15 +175,15 @@ export class ContextService {
     return intersection.size / union.size;
   }
 
-  /** 从消息中提取话题标题（取前 10 个词） */
+  /** Extracts a topic title from a message by taking the first 10 words. */
   private extractTopic(message: string): string {
     const words = message.split(/\s+/);
     return words.slice(0, 10).join(' ') + (words.length > 10 ? '...' : '');
   }
 
   /**
-   * 将新识别的实体追加到实体图谱，记录其出现位置（outlineId 为字符串型大纲条目 ID）。
-   * contextText 为该轮对话的原始文本，用于提取实体周边的上下文片段。
+   * Appends newly identified entities to the entity graph and records where they occurred.
+   * contextText is the raw text for the turn and is used to capture a nearby context snippet.
    */
   private updateEntitiesMap(
     entitiesMap: Record<string, EntityMapping>,
@@ -197,12 +198,12 @@ export class ContextService {
       if (!updatedMap[entity]) {
         updatedMap[entity] = {
           name: entity,
-          description: `关于 ${entity} 的信息`,
+          description: `Information about ${entity}`,
           relatedDocuments: [],
           occurrences: []
         };
       }
-      // 提取实体周边 40 字符作为上下文片段，找不到时取文本开头
+      // Capture a short snippet around the entity; fall back to the start of the text.
       const idx = contextText.toLowerCase().indexOf(entity.toLowerCase());
       const snippet = idx !== -1
         ? contextText.substring(Math.max(0, idx - 30), Math.min(contextText.length, idx + entity.length + 50)).trim()
@@ -218,9 +219,9 @@ export class ContextService {
   }
 
   /**
-   * 根据 sessionData 构建传递给 llmService 的 Context 对象。
-   * 注意：Context.llmConfig 目前未被 buildMessages() 使用，
-   * 实际 LLM 配置由 llmService.setProviderConfig() 管理。
+   * Builds the Context object passed to llmService from sessionData.
+   * Context.llmConfig is currently kept for compatibility; the active LLM settings
+   * are managed by llmService.setProviderConfig().
    */
   async createContext(sessionData: SessionData): Promise<Context> {
     return {

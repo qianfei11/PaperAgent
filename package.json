@@ -1,6 +1,6 @@
 {
   "name": "paper-agent",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "A graphical tool for LLM interaction with context management and document association",
   "main": "./dist/main/index.js",
   "scripts": {
@@ -42,13 +42,29 @@
   "build": {
     "appId": "com.paperagent.app",
     "productName": "PaperAgent",
+    "afterPack": "after-pack.cjs",
     "directories": {
-      "output": "dist"
+      "output": "release"
     },
     "files": [
       "dist/**/*",
       "node_modules/**/*",
-      "assets/**/*"
+      "assets/**/*",
+      "!dist/*.AppImage",
+      "!dist/*.snap",
+      "!dist/*.deb",
+      "!dist/*.rpm",
+      "!dist/*.dmg",
+      "!dist/*.exe",
+      "!dist/*.blockmap",
+      "!dist/latest*.yml",
+      "!dist/builder-debug.yml",
+      "!dist/builder-effective-config.yaml",
+      "!dist/linux-unpacked/**/*",
+      "!dist/win-unpacked/**/*",
+      "!dist/mac/**/*",
+      "!dist/mac-arm64/**/*",
+      "!dist/mac-universal/**/*"
     ],
     "win": {
       "target": "nsis",
@@ -60,7 +76,10 @@
     },
     "linux": {
       "target": "AppImage",
-      "icon": "assets/icons/icon.png"
+      "icon": "assets/icons/icon.png",
+      "executableArgs": [
+        "--no-sandbox"
+      ]
     }
   }
 }

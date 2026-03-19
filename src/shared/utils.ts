@@ -3,7 +3,7 @@
 import { SessionData, OutlineItem } from './types';
 
 /**
- * 生成UUID
+ * Generates a UUID.
  */
 export function generateId(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
@@ -13,14 +13,14 @@ export function generateId(): string {
 }
 
 /**
- * 获取当前时间戳
+ * Returns the current timestamp.
  */
 export function getCurrentTimestamp(): string {
   return new Date().toISOString();
 }
 
 /**
- * 创建新的会话数据
+ * Creates a new session object.
  */
 export function createNewSession(title: string, description: string = ''): SessionData {
   return {
@@ -46,7 +46,7 @@ export function createNewSession(title: string, description: string = ''): Sessi
 }
 
 /**
- * 更新会话的最后修改时间
+ * Updates the session's lastModified timestamp.
  */
 export function updateLastModified(sessionData: SessionData): SessionData {
   return {
@@ -56,7 +56,7 @@ export function updateLastModified(sessionData: SessionData): SessionData {
 }
 
 /**
- * 在大纲中添加新项目
+ * Adds a new item to the outline.
  */
 export function addOutlineItem(
   outline: OutlineItem[],
@@ -64,11 +64,11 @@ export function addOutlineItem(
   parentId: string | null = null
 ): OutlineItem[] {
   if (parentId === null) {
-    // 添加到顶层
+    // Add to the top level.
     return [...outline, item];
   }
 
-  // 递归查找父项并添加到其子项中
+  // Recursively find the parent item and append the new child.
   const addToParent = (items: OutlineItem[]): OutlineItem[] => {
     return items.map(i => {
       if (i.id === parentId) {
@@ -86,7 +86,7 @@ export function addOutlineItem(
 }
 
 /**
- * 查找大纲项
+ * Finds an outline item by ID.
  */
 export function findOutlineItem(outline: OutlineItem[], id: string): OutlineItem | null {
   for (const item of outline) {
@@ -102,7 +102,7 @@ export function findOutlineItem(outline: OutlineItem[], id: string): OutlineItem
 }
 
 /**
- * 更新大纲项
+ * Updates an outline item.
  */
 export function updateOutlineItem(
   outline: OutlineItem[],
@@ -121,7 +121,7 @@ export function updateOutlineItem(
 }
 
 /**
- * 删除大纲项
+ * Removes an outline item.
  */
 export function removeOutlineItem(outline: OutlineItem[], id: string): OutlineItem[] {
   return outline
@@ -135,15 +135,15 @@ export function removeOutlineItem(outline: OutlineItem[], id: string): OutlineIt
 }
 
 /**
- * 计算字符串的token数量（简单估算）
+ * Estimates the token count for a string.
  */
 export function estimateTokens(text: string): number {
-  // 简单估算：每4个字符约等于1个token
+  // Rough estimate: about 1 token per 4 characters.
   return Math.ceil(text.length / 4);
 }
 
 /**
- * 截断文本以适应指定的token限制
+ * Truncates text to fit within an estimated token limit.
  */
 export function truncateToTokenLimit(text: string, maxTokens: number): string {
   const estimatedTokens = estimateTokens(text);
@@ -151,11 +151,11 @@ export function truncateToTokenLimit(text: string, maxTokens: number): string {
     return text;
   }
 
-  // 按比例截断文本
+  // Truncate proportionally.
   const ratio = maxTokens / estimatedTokens;
   const targetLength = Math.floor(text.length * ratio);
   
-  // 尝试在句子边界处截断
+  // Try to truncate at a sentence boundary.
   let truncated = text.substring(0, targetLength);
   const lastSentenceEnd = Math.max(
     truncated.lastIndexOf('. '),
@@ -163,7 +163,7 @@ export function truncateToTokenLimit(text: string, maxTokens: number): string {
     truncated.lastIndexOf('!')
   );
   
-  if (lastSentenceEnd > targetLength * 0.8) { // 只有在句子结尾靠近截断点时才使用
+  if (lastSentenceEnd > targetLength * 0.8) {
     truncated = truncated.substring(0, lastSentenceEnd + 1);
   }
 

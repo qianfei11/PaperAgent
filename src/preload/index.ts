@@ -10,8 +10,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   showOpenDialog: (options: Electron.OpenDialogOptions) => ipcRenderer.invoke('show-open-dialog', options),
   saveSessionToFile: (sessionData: SessionData, filePath: string) =>
     ipcRenderer.invoke('save-session-to-file', sessionData, filePath),
+  saveSessionSnapshot: (sessionData: SessionData) =>
+    ipcRenderer.invoke('save-session-snapshot', sessionData),
   loadSessionFromFile: (filePath: string) =>
     ipcRenderer.invoke('load-session-from-file', filePath),
+  deleteSessionSnapshot: (sessionId: string) =>
+    ipcRenderer.invoke('delete-session-snapshot', sessionId),
 
   // ── File ──────────────────────────────────────────────────────────────────
   selectDirectory: () => ipcRenderer.invoke('select-directory'),

@@ -1,5 +1,6 @@
 // src/main/index.ts
-// 主进程入口：负责窗口管理、IPC 通信及 Node.js 原生能力（文件 I/O、PDF/OCR、LLM 代理）
+// Main-process entry point: window lifecycle, IPC, and native Node.js capabilities
+// such as file I/O, PDF/OCR processing, and the LLM proxy.
 
 import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'path';
@@ -9,8 +10,14 @@ import { SessionData, AppConfig, LLMProviderConfig } from '../shared/types';
 import { createNewSession } from '../shared/utils';
 
 let mainWindow: BrowserWindow | null = null;
+const pdfjsDistPath = path.dirname(require.resolve('pdfjs-dist/package.json'));
+const pdfStandardFontDataUrl = path.join(pdfjsDistPath, 'standard_fonts/');
 
-// 确保只运行一个应用实例
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+}
+
+// Ensure only one application instance is running.
 const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
@@ -25,6 +32,11 @@ if (!gotTheLock) {
 
   app.whenReady().then(() => {
     mainWindow = createMainWindow();
+    const storedSessionsDir = path.join(app.getPath('userData'), 'sessions');
+
+    function getStoredSessionPath(sessionId: string): string {
+      return path.join(storedSessionsDir, `${sessionId}.json`);
+    }
 
     // ── Session ──────────────────────────────────────────────────────────────
 
@@ -51,12 +63,42 @@ if (!gotTheLock) {
       }
     });
 
+    ipcMain.handle('save-session-snapshot', async (_event, sessionData: SessionData) => {
+      try {
+        fs.mkdirSync(storedSessionsDir, { recursive: true });
+        const filePath = getStoredSessionPath(sessionData.sessionId);
+        fs.writeFileSync(filePath, JSON.stringify(sessionData, null, 2), 'utf-8');
+        return { success: true, filePath };
+      } catch (error) {
+        return {
+          success: false,
+          filePath: '',
+          message: error instanceof Error ? error.message : 'Unknown error'
+        };
+      }
+    });
+
     ipcMain.handle('load-session-from-file', async (_event, filePath: string) => {
       try {
         const fileContent = fs.readFileSync(filePath, 'utf-8');
         return JSON.parse(fileContent);
       } catch (_error) {
         return null;
+      }
+    });
+
+    ipcMain.handle('delete-session-snapshot', async (_event, sessionId: string) => {
+      try {
+        const filePath = getStoredSessionPath(sessionId);
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          message: error instanceof Error ? error.message : 'Unknown error'
+        };
       }
     });
 
@@ -83,7 +125,7 @@ if (!gotTheLock) {
       version: '1.0',
       llm: {
         provider: 'openai-compatible',
-        baseUrl: 'https://api.openai.com',
+        baseUrl: 'https://api.openai.com/v1',
         apiKey: '',
         model: 'gpt-4o',
         temperature: 0.7,
@@ -95,14 +137,15 @@ if (!gotTheLock) {
       try {
         if (fs.existsSync(configPath)) {
           const raw = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
-          // 深合并：顶层字段 + llm 子对象，避免存储的局部配置丢失默认值
+          // Deep merge the top-level fields and the llm object so partial configs
+          // do not lose default values.
           return {
             ...defaultConfig,
             ...raw,
             llm: { ...defaultConfig.llm, ...(raw.llm ?? {}) }
           };
         }
-      } catch (_e) { /* 读取失败则返回默认配置 */ }
+      } catch (_e) { /* Fall back to the default config on read failure. */ }
       return defaultConfig;
     });
 
@@ -128,14 +171,17 @@ if (!gotTheLock) {
     });
 
     // ── Document Processing ──────────────────────────────────────────────────
-    // PDF 和 OCR 在主进程执行，因为 pdfjs / tesseract 需要 Node.js 环境
+    // PDF and OCR run in the main process because pdfjs and tesseract need Node.js.
 
     ipcMain.handle('extract-pdf-text', async (_event, filePath: string) => {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const pdfjsLib = require('pdfjs-dist/legacy/build/pdf.js');
-        const data = fs.readFileSync(filePath);
-        const pdfDocument = await pdfjsLib.getDocument({ data }).promise;
+        const pdfjsLib = require('pdfjs-dist/build/pdf.js');
+        const data = new Uint8Array(fs.readFileSync(filePath));
+        const pdfDocument = await pdfjsLib.getDocument({
+          data,
+          standardFontDataUrl: pdfStandardFontDataUrl
+        }).promise;
         let fullText = '';
         for (let i = 1; i <= pdfDocument.numPages; i++) {
           const page = await pdfDocument.getPage(i);
@@ -164,24 +210,24 @@ if (!gotTheLock) {
         return { success: false, text: '', message: error instanceof Error ? error.message : 'Unknown error' };
       } finally {
         if (worker) {
-          worker.terminate().catch(() => { /* 忽略清理错误 */ });
+          worker.terminate().catch(() => { /* Ignore cleanup failures. */ });
         }
       }
     });
 
     // ── LLM Streaming Proxy ──────────────────────────────────────────────────
-    // 使用 ipcMain.on（非 handle）是因为需要向渲染器推送多条消息（流式）
-    // 协议：llm-send-message → [llm-chunk*] → llm-done | llm-error
-    // 取消协议：llm-cancel-message(requestId) → 中止对应请求
+    // Use ipcMain.on instead of handle because the renderer needs multiple streamed events.
+    // Protocol: llm-send-message -> [llm-chunk*] -> llm-done | llm-error
+    // Cancellation: llm-cancel-message(requestId) -> abort the matching request
 
-    // 存储进行中的请求（requestId → AbortController）
+    // Store in-flight requests (requestId -> AbortController).
     const pendingRequests = new Map<string, AbortController>();
 
     /**
-     * 解析单行 SSE 数据，提取文本内容并通过回调返回。
-     * @param line  SSE 行（形如 "data: {...}"）
-     * @param isAnthropic  true 时按 Anthropic 格式解析，否则按 OpenAI 格式
-     * @param onText  收到文本片段时的回调
+     * Parses a single SSE line, extracts text content, and forwards it through a callback.
+     * @param line SSE line, for example "data: {...}"
+     * @param isAnthropic When true, parse Anthropic events; otherwise parse OpenAI-compatible events.
+     * @param onText Callback invoked for each text fragment.
      */
     function parseSseLine(line: string, isAnthropic: boolean, onText: (text: string) => void): void {
       if (!line.startsWith('data: ')) return;
@@ -197,12 +243,12 @@ if (!gotTheLock) {
           const text = parsed.choices?.[0]?.delta?.content;
           if (text) onText(text);
         }
-      } catch (_e) { /* 忽略格式异常行 */ }
+      } catch (_e) { /* Ignore malformed lines. */ }
     }
 
     /**
-     * 为 axios 流建立 SSE 监听，将 chunk/done/error 事件转发给渲染器。
-     * onComplete 在流结束或报错后调用，用于清理 pendingRequests。
+     * Attaches SSE listeners to an axios stream and forwards chunk/done/error
+     * events to the renderer. onComplete runs after stream end or failure.
      */
     function pipeStream(
       stream: NodeJS.ReadableStream,
@@ -223,7 +269,7 @@ if (!gotTheLock) {
       stream.on('end', () => { onComplete(); send('llm-done', { requestId }); });
       stream.on('error', (err: Error) => {
         onComplete();
-        // axios CanceledError 时不发送错误（渲染端已处理取消）
+        // Do not emit an error for axios cancellation because the renderer already handles it.
         if ((err as NodeJS.ErrnoException).code !== 'ERR_CANCELED') {
           send('llm-error', { requestId, error: err.message });
         }
@@ -274,10 +320,10 @@ if (!gotTheLock) {
           pipeStream(response.data, true, send, requestId, cleanup);
 
         } else {
-          // ── OpenAI 兼容 Chat Completions API ──────────────────────────────
-          const baseUrl = (config.baseUrl ?? 'https://api.openai.com').replace(/\/$/, '');
+          // ── OpenAI-compatible Chat Completions API ────────────────────────
+          const baseUrl = (config.baseUrl ?? 'https://api.openai.com/v1').replace(/\/$/, '');
           const response = await axios.post(
-            `${baseUrl}/v1/chat/completions`,
+            `${baseUrl}/chat/completions`,
             {
               model: config.model,
               messages,
@@ -300,7 +346,7 @@ if (!gotTheLock) {
       } catch (error) {
         cleanup();
         const axiosError = error as { code?: string; message?: string };
-        // 忽略主动取消产生的错误
+        // Ignore errors triggered by intentional cancellation.
         if (axiosError.code !== 'ERR_CANCELED') {
           send('llm-error', { requestId, error: axiosError.message ?? 'Unknown error' });
         }

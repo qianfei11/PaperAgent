@@ -59,10 +59,10 @@ export class SessionManager {
     }
     render() {
         this.container.innerHTML = `
-      <h3>会话历史</h3>
+      <h3>Session History</h3>
       <div class="session-list">
         ${this.sessions.length === 0
-            ? '<p class="no-sessions">暂无历史会话</p>'
+            ? '<p class="no-sessions">No saved sessions yet.</p>'
             : this.sessions.map(session => this.renderSessionItem(session)).join('')}
       </div>
     `;
@@ -84,12 +84,12 @@ export class SessionManager {
       <div id="session-${session.id}" class="session-item">
         <div class="session-header">
           <h4>${session.title}</h4>
-          <button class="delete-session-btn" data-session-id="${session.id}">删除</button>
+          <button class="delete-session-btn" data-session-id="${session.id}">Delete</button>
         </div>
         <div class="session-info">
-          <p>${session.description || '无描述'}</p>
-          <small>创建于: ${createdDate}</small><br>
-          <small>更新于: ${modifiedDate}</small>
+          <p>${session.description || 'No description'}</p>
+          <small>Created: ${createdDate}</small><br>
+          <small>Updated: ${modifiedDate}</small>
         </div>
       </div>
     `;
@@ -99,8 +99,8 @@ export class SessionManager {
             if (e.target.classList.contains('delete-session-btn')) {
                 const sessionId = e.target.getAttribute('data-session-id');
                 if (sessionId) {
-                    if (confirm('确定要删除这个会话吗？此操作不可撤销。')) {
-                        console.log(`删除会话: ${sessionId}`);
+                    if (confirm('Delete this session? This action cannot be undone.')) {
+                        console.log(`Delete session: ${sessionId}`);
                     }
                 }
             }

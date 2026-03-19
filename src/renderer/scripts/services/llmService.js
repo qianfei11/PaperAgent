@@ -41,7 +41,7 @@ export class OpenAILLMService {
     }
     async sendOnce(messages) {
         if (!this.providerConfig)
-            throw new Error('LLM 未配置，请先在设置中填写 API 信息');
+            throw new Error('LLM is not configured. Fill in the API settings first.');
         return new Promise((resolve, reject) => {
             this.sendMessageStreaming(messages, this.providerConfig, () => { }, resolve, reject);
         });
@@ -49,18 +49,18 @@ export class OpenAILLMService {
     async sendMessage(context, userMessage) {
         const messages = this.buildMessages(context, userMessage);
         if (!this.providerConfig)
-            throw new Error('LLM 未配置');
+            throw new Error('LLM is not configured.');
         return new Promise((resolve, reject) => {
             this.sendMessageStreaming(messages, this.providerConfig, () => { }, resolve, reject);
         });
     }
     async summarizeConversation(context) {
         const recentHistory = context.sessionData.conversationHistory.slice(-10);
-        const historyText = recentHistory.map(m => `${m.role === 'user' ? '用户' : '助手'}: ${m.content}`).join('\n');
+        const historyText = recentHistory.map(m => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`).join('\n');
         const messages = [
             {
                 role: 'system',
-                content: '你是一个学术研究助手，请将以下对话总结为结构化数据，用JSON格式回复，包含 summary(字符串), keyPoints(字符串数组), entities(字符串数组) 三个字段，只回复JSON，不要加markdown代码块。'
+                content: 'You are an academic research assistant. Summarize the following conversation as structured JSON with the fields summary (string), keyPoints (string array), and entities (string array). Reply with JSON only and do not wrap it in markdown.'
             },
             { role: 'user', content: historyText }
         ];
@@ -69,14 +69,14 @@ export class OpenAILLMService {
             return JSON.parse(result);
         }
         catch (_e) {
-            return { summary: '对话总结生成失败', keyPoints: [], entities: [] };
+            return { summary: 'Failed to generate a conversation summary.', keyPoints: [], entities: [] };
         }
     }
     async extractKeyPoints(text) {
         const messages = [
             {
                 role: 'system',
-                content: '请从以下文本中提取3-5个关键点，用JSON数组格式回复（字符串数组），只回复JSON，不要加markdown代码块。'
+                content: 'Extract 3 to 5 key points from the following text. Reply with a JSON array of strings only and do not wrap it in markdown.'
             },
             { role: 'user', content: text.substring(0, 1000) }
         ];
@@ -93,7 +93,7 @@ export class OpenAILLMService {
         const messages = [
             {
                 role: 'system',
-                content: '请识别以下文本中的关键实体（人名、机构、概念、方法等），用JSON数组格式回复（字符串数组），只回复JSON，不要加markdown代码块。'
+                content: 'Identify the key entities in the following text, such as people, organizations, concepts, and methods. Reply with a JSON array of strings only and do not wrap it in markdown.'
             },
             { role: 'user', content: text.substring(0, 1000) }
         ];
@@ -107,23 +107,23 @@ export class OpenAILLMService {
         }
     }
     buildMessages(context, userMessage) {
-        let systemContent = '你是一个学术研究助手，帮助用户理解和分析论文及相关学术内容。\n\n';
+        let systemContent = 'You are an academic research assistant who helps users understand and analyze papers and related scholarly content.\n\n';
         if (context.sessionData.outline?.length > 0) {
-            systemContent += '当前讨论的大纲:\n';
+            systemContent += 'Current discussion outline:\n';
             context.sessionData.outline.forEach((item, index) => {
                 systemContent += `${index + 1}. ${item.title}: ${item.summary}\n`;
             });
             systemContent += '\n';
         }
         if (context.documents?.length > 0) {
-            systemContent += '相关文档:\n';
+            systemContent += 'Related documents:\n';
             context.documents.forEach((doc, index) => {
                 const preview = doc.contentPreview ? ` (${doc.contentPreview.substring(0, 100)}...)` : '';
                 systemContent += `${index + 1}. ${doc.title || doc.path}${preview}\n`;
             });
             systemContent += '\n';
         }
-        systemContent += '请基于以上上下文提供详细、准确的回答。';
+        systemContent += 'Use the context above to provide a detailed and accurate answer.';
         const messages = [
             { role: 'system', content: systemContent }
         ];

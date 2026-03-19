@@ -22,7 +22,7 @@ export class OutlineComponent {
 
   public render(): void {
     if (this.outlineData.length === 0) {
-      this.container.innerHTML = '<p>暂无大纲内容</p>';
+      this.container.innerHTML = '<p>No outline yet.</p>';
       return;
     }
 
@@ -38,7 +38,7 @@ export class OutlineComponent {
       const outlineItemElement = this.createOutlineItemElement(item, level);
       fragment.appendChild(outlineItemElement);
 
-      // 如果有子项，则渲染子项
+      // Render children when present.
       if (item.children && item.children.length > 0) {
         const childFragment = this.buildOutlineTree(item.children, level + 1);
         outlineItemElement.appendChild(childFragment);
@@ -64,9 +64,9 @@ export class OutlineComponent {
     outlineItem.appendChild(titleDiv);
     outlineItem.appendChild(summaryDiv);
 
-    // 添加点击事件来查看详细信息
+    // Open the detail view when the item is clicked.
     outlineItem.addEventListener('click', (e) => {
-      // 防止点击子元素时冒泡
+      // Prevent nested content clicks from triggering unrelated handlers.
       if ((e.target as HTMLElement).classList.contains('outline-item') || 
           (e.target as HTMLElement).classList.contains('outline-item-title') ||
           (e.target as HTMLElement).classList.contains('outline-item-summary')) {
@@ -78,10 +78,10 @@ export class OutlineComponent {
   }
 
   private onItemClick(item: OutlineItem): void {
-    // 在实际实现中，这里会显示大纲项的详细信息
+    // In the full implementation this would show the outline item details.
     console.log('Outline item clicked:', item);
     
-    // 可以触发一个自定义事件
+    // Emit a custom event for other UI modules.
     const event = new CustomEvent('outline-item-clicked', {
       detail: { item }
     });
@@ -90,10 +90,10 @@ export class OutlineComponent {
 
   public addItem(item: OutlineItem, parentId: string | null = null): void {
     if (parentId) {
-      // 添加到指定父项下
+      // Add under the specified parent item.
       this.addToParent(this.outlineData, parentId, item);
     } else {
-      // 添加到顶层
+      // Add at the top level.
       this.outlineData.push(item);
     }
     this.render();

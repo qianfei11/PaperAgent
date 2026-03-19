@@ -14,7 +14,7 @@ export class OutlineComponent {
     }
     render() {
         if (this.outlineData.length === 0) {
-            this.container.innerHTML = '<p>暂无大纲内容</p>';
+            this.container.innerHTML = '<p>No outline yet.</p>';
             return;
         }
         this.container.innerHTML = '';

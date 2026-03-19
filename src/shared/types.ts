@@ -1,7 +1,7 @@
 // src/shared/types.ts
-// 全局类型定义，在主进程、渲染进程和 preload 之间共享。
+// Shared type definitions used by the main process, renderer, and preload layers.
 
-// ── 大纲 ───────────────────────────────────────────────────────────────────────
+// ── Outline ───────────────────────────────────────────────────────────────────
 
 export interface OutlineItem {
   id: string;
@@ -14,7 +14,7 @@ export interface OutlineItem {
   entities: string[];
   tags: string[];
   relatedDocuments: DocumentReference[];
-  /** LLM 对该条目信息的置信度（0–1） */
+  /** Confidence score assigned by the LLM for this item (0-1). */
   confidence: number;
   timestamp: string;
   children?: OutlineItem[];
@@ -27,7 +27,7 @@ export interface DocumentReference {
   extractedContent: string;
 }
 
-// ── 实体图谱 ──────────────────────────────────────────────────────────────────
+// ── Entity Graph ─────────────────────────────────────────────────────────────
 
 export interface EntityMapping {
   name: string;
@@ -37,30 +37,30 @@ export interface EntityMapping {
 }
 
 export interface EntityOccurrence {
-  /** 关联的大纲条目 ID（OutlineItem.id，字符串） */
+  /** Linked outline item ID (OutlineItem.id, string). */
   outlineId: string;
   context: string;
   timestamp: string;
 }
 
-// ── 文档库 ────────────────────────────────────────────────────────────────────
+// ── Document Library ─────────────────────────────────────────────────────────
 
 export interface DocumentInfo {
   key: string;
   path: string;
   type: string;
   title: string;
-  /** 文本长度（字符数），图片/未提取文档为 0 */
+  /** Extracted text length in characters. Images or unparsed documents stay at 0. */
   size: number;
   uploadDate: string;
   metadata: Record<string, unknown>;
   contentPreview: string;
-  /** 提取的完整文本内容（可选，大文档可能不存储） */
+  /** Extracted full text, optional because large documents may not be stored in full. */
   fullContent?: string;
   associatedEntities: string[];
 }
 
-// ── 对话历史 ──────────────────────────────────────────────────────────────────
+// ── Conversation History ─────────────────────────────────────────────────────
 
 export interface ConversationMessage {
   id: string;
@@ -71,7 +71,7 @@ export interface ConversationMessage {
   referencedDocuments: string[];
 }
 
-// ── 会话数据 ──────────────────────────────────────────────────────────────────
+// ── Session Data ─────────────────────────────────────────────────────────────
 
 export interface SessionData {
   sessionId: string;
@@ -94,12 +94,13 @@ export interface SessionData {
   };
 }
 
-// ── LLM 配置 ──────────────────────────────────────────────────────────────────
+// ── LLM Configuration ────────────────────────────────────────────────────────
 
 /**
- * LLM 提供商运行时配置，用于 IPC 通信和 API 请求。
- * - provider 为 'anthropic' 时，baseUrl 无效（固定调用官方端点）。
- * - provider 为 'openai-compatible' 时，支持任何兼容 OpenAI Chat API 的服务。
+ * Runtime LLM provider configuration used for IPC and API requests.
+ * - When provider is 'anthropic', baseUrl is ignored and the official endpoint is used.
+ * - When provider is 'openai-compatible', baseUrl is used as the API base URL directly.
+ *   If the service needs a prefix like /v1, include it in baseUrl yourself.
  */
 export interface LLMProviderConfig {
   provider: 'openai-compatible' | 'anthropic';
@@ -115,11 +116,11 @@ export interface AppConfig {
   version: string;
 }
 
-// ── Context（传递给 LLM 服务层）────────────────────────────────────────────────
+// ── Context (passed into the LLM service layer) ─────────────────────────────
 
 /**
- * LLMConfig 保留用于 Context 接口，实际请求使用 LLMProviderConfig。
- * @deprecated 新代码请直接使用 LLMProviderConfig。
+ * LLMConfig is kept for the Context interface, but actual requests use LLMProviderConfig.
+ * @deprecated New code should use LLMProviderConfig directly.
  */
 export interface LLMConfig {
   provider: 'openai' | 'anthropic' | 'local';
@@ -129,10 +130,10 @@ export interface LLMConfig {
   maxTokens?: number;
 }
 
-/** 传递给 llmService.buildMessages() 的上下文快照 */
+/** Context snapshot passed to llmService.buildMessages(). */
 export interface Context {
   sessionData: SessionData;
-  /** 目前未被 buildMessages() 使用，实际配置通过 setProviderConfig() 注入 */
+  /** Currently unused by buildMessages(); active config is injected via setProviderConfig(). */
   llmConfig: LLMConfig;
   documents: DocumentInfo[];
 }

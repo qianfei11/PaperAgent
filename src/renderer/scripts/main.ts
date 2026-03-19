@@ -1,5 +1,5 @@
 // src/renderer/scripts/main.ts
-// 渲染进程入口：初始化应用、处理用户交互、协调各服务。
+// Renderer entry point: initializes the app, handles user interaction, and coordinates services.
 
 import type { SessionData, OutlineItem, AppConfig, LLMProviderConfig } from '../../shared/types.js';
 import { SessionManager } from './components/sessionManager.js';
@@ -13,7 +13,9 @@ declare global {
       showSaveDialog: (options: unknown) => Promise<string | undefined>;
       showOpenDialog: (options: unknown) => Promise<string[]>;
       saveSessionToFile: (data: SessionData, path: string) => Promise<{ success: boolean; message?: string }>;
+      saveSessionSnapshot: (data: SessionData) => Promise<{ success: boolean; filePath: string; message?: string }>;
       loadSessionFromFile: (path: string) => Promise<SessionData | null>;
+      deleteSessionSnapshot: (sessionId: string) => Promise<{ success: boolean; message?: string }>;
       selectFiles: (filters: unknown[]) => Promise<string[]>;
       getConfig: () => Promise<AppConfig>;
       saveConfig: (config: AppConfig) => Promise<{ success: boolean; message?: string }>;
@@ -29,6 +31,26 @@ declare global {
   }
 }
 
+interface SessionHistoryEntry {
+  id: string;
+  title: string;
+  description: string;
+  createdAt: string;
+  lastModified: string;
+  filePath: string;
+  storagePath: string;
+}
+
+const SESSION_HISTORY_KEY = 'paperAgentSessions';
+const PANEL_STATE_KEY = 'paperAgentCollapsedPanels';
+
+function touchSession(sessionData: SessionData): SessionData {
+  return {
+    ...sessionData,
+    lastModified: new Date().toISOString()
+  };
+}
+
 class PaperAgentApp {
   private sessionData: SessionData | null = null;
   private chatContainer: HTMLElement | null = null;
@@ -39,12 +61,17 @@ class PaperAgentApp {
   private sendButton: HTMLButtonElement | null = null;
   private cancelButton: HTMLButtonElement | null = null;
   private sessionTitle: HTMLElement | null = null;
+  private sessionTitleInput: HTMLInputElement | null = null;
+  private editSessionTitleBtn: HTMLButtonElement | null = null;
+  private saveSessionTitleBtn: HTMLButtonElement | null = null;
+  private cancelSessionTitleBtn: HTMLButtonElement | null = null;
   private cancelCurrentRequest: (() => void) | null = null;
+  private collapsedPanels = new Set<string>();
 
-  // 当前生效的 LLM 提供商配置，由设置页面更新
+  // Active LLM provider configuration, updated from the settings dialog.
   private providerConfig: LLMProviderConfig = {
     provider: 'openai-compatible',
-    baseUrl: 'https://api.openai.com',
+    baseUrl: 'https://api.openai.com/v1',
     apiKey: '',
     model: 'gpt-4o',
     temperature: 0.7,
@@ -75,6 +102,10 @@ class PaperAgentApp {
     this.sendButton = document.getElementById('sendBtn') as HTMLButtonElement;
     this.cancelButton = document.getElementById('cancelBtn') as HTMLButtonElement;
     this.sessionTitle = document.getElementById('sessionTitle');
+    this.sessionTitleInput = document.getElementById('sessionTitleInput') as HTMLInputElement;
+    this.editSessionTitleBtn = document.getElementById('editSessionTitleBtn') as HTMLButtonElement;
+    this.saveSessionTitleBtn = document.getElementById('saveSessionTitleBtn') as HTMLButtonElement;
+    this.cancelSessionTitleBtn = document.getElementById('cancelSessionTitleBtn') as HTMLButtonElement;
 
     this.cancelButton?.addEventListener('click', () => {
       if (this.cancelCurrentRequest) {
@@ -83,26 +114,39 @@ class PaperAgentApp {
       }
     });
 
-    // 顶部工具栏按钮
+    // Top toolbar buttons
     document.getElementById('newSessionBtn')?.addEventListener('click', () => this.createNewSession());
     document.getElementById('saveSessionBtn')?.addEventListener('click', () => this.saveSession());
     document.getElementById('loadSessionBtn')?.addEventListener('click', () => this.loadSession());
     document.getElementById('addDocumentBtn')?.addEventListener('click', () => this.addDocument());
     document.getElementById('settingsBtn')?.addEventListener('click', () => this.openSettings());
+    this.editSessionTitleBtn?.addEventListener('click', () => this.startSessionTitleEdit());
+    this.saveSessionTitleBtn?.addEventListener('click', () => { void this.commitSessionTitleEdit(); });
+    this.cancelSessionTitleBtn?.addEventListener('click', () => this.cancelSessionTitleEdit());
+    this.sessionTitleInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        void this.commitSessionTitleEdit();
+      } else if (e.key === 'Escape') {
+        this.cancelSessionTitleEdit();
+      }
+    });
 
-    // 设置 Modal 按钮（仅绑定一次，避免重复监听器）
+    // Settings modal buttons. Bind once to avoid duplicate listeners.
     this.wireSettingsModal();
+    this.setupPanelToggles();
+    this.syncSessionTitleEditState();
 
     this.renderSessionHistory();
 
-    // 文档搜索
+    // Document search
     document.getElementById('documentSearch')?.addEventListener('input', (e) => {
       this.filterDocuments((e.target as HTMLInputElement).value);
     });
   }
 
   private setupEventListeners(): void {
-    // Enter 发送，Shift+Enter 换行
+    // Enter sends, Shift+Enter inserts a newline.
     this.messageInput?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
@@ -118,12 +162,63 @@ class PaperAgentApp {
       this.providerConfig = config.llm;
       this.llmService.setProviderConfig(this.providerConfig);
     } catch (e) {
-      console.error('加载配置失败:', e);
+      console.error('Failed to load config:', e);
     }
   }
 
   private loadInitialView(): void {
-    this.updateSessionTitle('无活动会话');
+    this.updateSessionTitle('No Active Session');
+    this.syncSessionTitleEditState();
+  }
+
+  private setupPanelToggles(): void {
+    document.querySelectorAll<HTMLButtonElement>('.panel-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const panelId = btn.dataset['panelTarget'];
+        if (panelId) this.togglePanel(panelId);
+      });
+    });
+    this.restoreCollapsedPanels();
+  }
+
+  private restoreCollapsedPanels(): void {
+    try {
+      const stored = JSON.parse(localStorage.getItem(PANEL_STATE_KEY) ?? '[]');
+      if (Array.isArray(stored)) {
+        this.collapsedPanels = new Set(stored.filter((panelId): panelId is string => typeof panelId === 'string'));
+      }
+    } catch (error) {
+      console.error('Failed to restore collapsed panel state:', error);
+      this.collapsedPanels.clear();
+    }
+    this.applyCollapsedPanels();
+  }
+
+  private saveCollapsedPanels(): void {
+    localStorage.setItem(PANEL_STATE_KEY, JSON.stringify([...this.collapsedPanels]));
+  }
+
+  private togglePanel(panelId: string): void {
+    if (this.collapsedPanels.has(panelId)) {
+      this.collapsedPanels.delete(panelId);
+    } else {
+      this.collapsedPanels.add(panelId);
+    }
+    this.applyCollapsedPanels();
+    this.saveCollapsedPanels();
+  }
+
+  private applyCollapsedPanels(): void {
+    document.querySelectorAll<HTMLElement>('.sidebar[data-panel-id]').forEach(panel => {
+      const panelId = panel.dataset['panelId'];
+      const collapsed = panelId !== undefined && this.collapsedPanels.has(panelId);
+      panel.classList.toggle('collapsed', collapsed);
+      const toggle = panel.querySelector<HTMLButtonElement>('.panel-toggle');
+      if (toggle) {
+        toggle.textContent = collapsed ? '▸' : '▾';
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+      }
+    });
   }
 
   // ── Toast Notifications ─────────────────────────────────────────────────────
@@ -151,38 +246,40 @@ class PaperAgentApp {
       this.sessionData = await window.electronAPI.createNewSession();
       if (this.sessionData) {
         this.updateSessionTitle(this.sessionData.title);
+        this.syncSessionTitleEditState();
         this.clearChat();
         this.renderOutline();
         this.renderDocuments();
-        this.addMessageToChat('assistant', '您好！我是 PaperAgent 助手，可以帮助您进行论文阅读和思考。请告诉我您想讨论什么内容。');
-        this.addToSessionHistory(this.sessionData);
+        this.addMessageToChat('assistant', 'Hello. I am the PaperAgent Assistant. I can help you read, analyze, and discuss research papers. What would you like to work on?');
+        await this.persistSessionSnapshot({ touch: false });
       }
     } catch (error) {
-      this.showNotification('创建新会话失败，请重试', 'error');
+      this.showNotification('Failed to create a new session. Please try again.', 'error');
       console.error(error);
     }
   }
 
   private async saveSession(): Promise<void> {
-    if (!this.sessionData) { this.showNotification('没有活动的会话可以保存', 'error'); return; }
+    if (!this.sessionData) { this.showNotification('There is no active session to save.', 'error'); return; }
 
     try {
       const filePath = await window.electronAPI.showSaveDialog({
-        title: '保存会话',
+        title: 'Save Session',
         defaultPath: `${this.sessionData.title || 'session'}.json`,
         filters: [{ name: 'JSON Files', extensions: ['json'] }]
       });
       if (!filePath) return;
 
+      this.sessionData = touchSession(this.sessionData);
       const result = await window.electronAPI.saveSessionToFile(this.sessionData, filePath);
       if (result.success) {
-        this.updateSessionFilePath(this.sessionData.sessionId, filePath);
-        this.showNotification('会话已保存', 'success');
+        await this.persistSessionSnapshot({ filePath, touch: false });
+        this.showNotification('Session saved.', 'success');
       } else {
-        this.showNotification(`保存失败: ${result.message}`, 'error');
+        this.showNotification(`Save failed: ${result.message}`, 'error');
       }
     } catch (error) {
-      this.showNotification('保存会话时发生错误', 'error');
+      this.showNotification('An error occurred while saving the session.', 'error');
       console.error(error);
     }
   }
@@ -190,7 +287,7 @@ class PaperAgentApp {
   private async loadSession(): Promise<void> {
     try {
       const filePaths = await window.electronAPI.showOpenDialog({
-        title: '加载会话',
+        title: 'Load Session',
         filters: [{ name: 'JSON Files', extensions: ['json'] }],
         properties: ['openFile']
       });
@@ -199,18 +296,14 @@ class PaperAgentApp {
       const filePath = filePaths[0]!;
       this.sessionData = await window.electronAPI.loadSessionFromFile(filePath);
       if (this.sessionData) {
-        this.updateSessionTitle(this.sessionData.title);
-        this.clearChat();
-        this.renderOutline();
-        this.renderDocuments();
-        this.addToSessionHistory(this.sessionData);
-        this.updateSessionFilePath(this.sessionData.sessionId, filePath);
-        this.showNotification('会话加载成功', 'success');
+        this.renderSession();
+        await this.persistSessionSnapshot({ filePath, touch: false });
+        this.showNotification('Session loaded.', 'success');
       } else {
-        this.showNotification('加载失败：文件格式不正确', 'error');
+        this.showNotification('Load failed: the file format is invalid.', 'error');
       }
     } catch (error) {
-      this.showNotification('加载会话时发生错误', 'error');
+      this.showNotification('An error occurred while loading the session.', 'error');
       console.error(error);
     }
   }
@@ -218,29 +311,34 @@ class PaperAgentApp {
   // ── Document Management ─────────────────────────────────────────────────────
 
   private async addDocument(): Promise<void> {
-    if (!this.sessionData) { this.showNotification('请先创建或加载会话', 'error'); return; }
+    if (!this.sessionData) { this.showNotification('Create or load a session first.', 'error'); return; }
 
     try {
       const filePaths = await window.electronAPI.selectFiles([
-        { name: '文档', extensions: ['pdf', 'doc', 'docx', 'txt', 'jpg', 'jpeg', 'png', 'bmp', 'tiff'] }
+        { name: 'Documents', extensions: ['pdf', 'doc', 'docx', 'txt', 'jpg', 'jpeg', 'png', 'bmp', 'tiff'] }
       ]);
       if (!filePaths || filePaths.length === 0) return;
 
+      let hasChanges = false;
       for (const filePath of filePaths) {
         const fileName = filePath.split('/').pop() ?? filePath.split('\\').pop() ?? filePath;
-        this.showNotification(`正在处理 ${fileName}...`, 'info');
+        this.showNotification(`Processing ${fileName}...`, 'info');
         try {
           const docInfo = await this.contextService.getDocumentService().uploadDocument(filePath);
           this.sessionData!.documentLibrary.documents.push(docInfo);
           this.sessionData!.metadata.documentsCount = this.sessionData!.documentLibrary.documents.length;
-          this.showNotification(`文档 "${docInfo.title}" 添加成功`, 'success');
+          hasChanges = true;
+          this.showNotification(`Document "${docInfo.title}" added.`, 'success');
         } catch (_e) {
-          this.showNotification(`文件 "${fileName}" 处理失败`, 'error');
+          this.showNotification(`Failed to process "${fileName}".`, 'error');
         }
       }
       this.renderDocuments();
+      if (hasChanges) {
+        await this.persistSessionSnapshot();
+      }
     } catch (error) {
-      this.showNotification('添加文档时发生错误', 'error');
+      this.showNotification('An error occurred while adding documents.', 'error');
       console.error(error);
     }
   }
@@ -248,14 +346,14 @@ class PaperAgentApp {
   // ── Messaging ───────────────────────────────────────────────────────────────
 
   private async sendMessage(): Promise<void> {
-    if (!this.sessionData) { this.showNotification('请先创建或加载会话', 'error'); return; }
+    if (!this.sessionData) { this.showNotification('Create or load a session first.', 'error'); return; }
     if (!this.messageInput) return;
 
     const message = this.messageInput.value.trim();
     if (!message) return;
 
     if (!this.providerConfig.apiKey) {
-      this.showNotification('请先在设置中配置 API Key', 'error');
+      this.showNotification('Configure an API key in Settings first.', 'error');
       this.openSettings();
       return;
     }
@@ -264,7 +362,7 @@ class PaperAgentApp {
     this.addMessageToChat('user', message);
     this.messageInput.value = '';
 
-    // 预先创建 assistant 消息气泡，流式填充内容
+    // Create the assistant message shell up front and stream content into it.
     const assistantEl = this.createStreamingMessageElement();
 
     try {
@@ -288,17 +386,18 @@ class PaperAgentApp {
                 fullText
               );
               this.renderOutline();
+              await this.persistSessionSnapshot();
             } catch (e) {
-              console.error('上下文更新失败:', e);
+              console.error('Failed to update context:', e);
             }
             resolve();
           },
           (error) => {
             this.cancelCurrentRequest = null;
-            const cancelled = error === '已取消';
+            const cancelled = error === 'Cancelled';
             this.finalizeStreamingMessage(assistantEl, !cancelled);
             if (!cancelled) {
-              this.showNotification(`LLM 响应错误: ${error}`, 'error');
+              this.showNotification(`LLM response error: ${error}`, 'error');
               reject(new Error(error));
             } else {
               resolve();
@@ -307,8 +406,8 @@ class PaperAgentApp {
         );
       });
     } catch (error) {
-      // LLM 错误已在 onError 回调中通知用户；其他错误仅记录日志
-      console.error('发送消息失败:', error);
+      // LLM errors are already surfaced in onError; keep other failures in the log.
+      console.error('Failed to send message:', error);
     } finally {
       this.setSendingState(false);
     }
@@ -324,6 +423,172 @@ class PaperAgentApp {
     }
   }
 
+  private renderMessageContent(contentEl: HTMLElement, role: 'user' | 'assistant', content: string): void {
+    if (role === 'assistant') {
+      contentEl.innerHTML = this.renderMarkdown(content);
+    } else {
+      contentEl.textContent = content;
+    }
+  }
+
+  private renderMarkdown(markdown: string): string {
+    const normalized = markdown.replace(/\r\n?/g, '\n');
+    const lines = normalized.split('\n');
+    const blocks: string[] = [];
+    let index = 0;
+
+    while (index < lines.length) {
+      const rawLine = lines[index] ?? '';
+      const trimmed = rawLine.trim();
+
+      if (!trimmed) {
+        index++;
+        continue;
+      }
+
+      if (trimmed.startsWith('```')) {
+        const language = trimmed.slice(3).trim().replace(/[^a-zA-Z0-9_-]/g, '');
+        const codeLines: string[] = [];
+        index++;
+        while (index < lines.length && !(lines[index] ?? '').trim().startsWith('```')) {
+          codeLines.push(lines[index] ?? '');
+          index++;
+        }
+        if (index < lines.length) index++;
+        const languageClass = language ? ` class="language-${this.escapeAttribute(language)}"` : '';
+        blocks.push(`<pre><code${languageClass}>${this.escapeHtml(codeLines.join('\n'))}</code></pre>`);
+        continue;
+      }
+
+      const headingMatch = /^(#{1,6})\s+(.*)$/.exec(trimmed);
+      if (headingMatch) {
+        const hashes = headingMatch[1] ?? '';
+        const headingText = headingMatch[2] ?? '';
+        const level = hashes.length;
+        blocks.push(`<h${level}>${this.renderInlineMarkdown(headingText)}</h${level}>`);
+        index++;
+        continue;
+      }
+
+      if (/^>\s?/.test(trimmed)) {
+        const quoteLines: string[] = [];
+        while (index < lines.length && /^>\s?/.test((lines[index] ?? '').trim())) {
+          quoteLines.push((lines[index] ?? '').trim().replace(/^>\s?/, ''));
+          index++;
+        }
+        blocks.push(`<blockquote><p>${quoteLines.map(line => this.renderInlineMarkdown(line)).join('<br>')}</p></blockquote>`);
+        continue;
+      }
+
+      if (/^(\*|-|\+)\s+/.test(trimmed)) {
+        const items: string[] = [];
+        while (index < lines.length && /^(\*|-|\+)\s+/.test((lines[index] ?? '').trim())) {
+          items.push((lines[index] ?? '').trim().replace(/^(\*|-|\+)\s+/, ''));
+          index++;
+        }
+        blocks.push(`<ul>${items.map(item => `<li>${this.renderInlineMarkdown(item)}</li>`).join('')}</ul>`);
+        continue;
+      }
+
+      if (/^\d+\.\s+/.test(trimmed)) {
+        const items: string[] = [];
+        while (index < lines.length && /^\d+\.\s+/.test((lines[index] ?? '').trim())) {
+          items.push((lines[index] ?? '').trim().replace(/^\d+\.\s+/, ''));
+          index++;
+        }
+        blocks.push(`<ol>${items.map(item => `<li>${this.renderInlineMarkdown(item)}</li>`).join('')}</ol>`);
+        continue;
+      }
+
+      if (/^(-{3,}|\*{3,})$/.test(trimmed)) {
+        blocks.push('<hr>');
+        index++;
+        continue;
+      }
+
+      const paragraphLines: string[] = [];
+      while (index < lines.length) {
+        const line = lines[index] ?? '';
+        const lineTrimmed = line.trim();
+        if (!lineTrimmed) {
+          index++;
+          break;
+        }
+        if (paragraphLines.length > 0 && this.isMarkdownBlockBoundary(lineTrimmed)) {
+          break;
+        }
+        paragraphLines.push(lineTrimmed);
+        index++;
+      }
+      blocks.push(`<p>${paragraphLines.map(line => this.renderInlineMarkdown(line)).join('<br>')}</p>`);
+    }
+
+    if (blocks.length === 0) {
+      return `<p>${this.renderInlineMarkdown(normalized)}</p>`;
+    }
+
+    return blocks.join('');
+  }
+
+  private isMarkdownBlockBoundary(trimmed: string): boolean {
+    return trimmed.startsWith('```') ||
+      /^#{1,6}\s+/.test(trimmed) ||
+      /^>\s?/.test(trimmed) ||
+      /^(\*|-|\+)\s+/.test(trimmed) ||
+      /^\d+\.\s+/.test(trimmed) ||
+      /^(-{3,}|\*{3,})$/.test(trimmed);
+  }
+
+  private renderInlineMarkdown(text: string): string {
+    const codeTokens: string[] = [];
+    let rendered = text.replace(/`([^`]+)`/g, (_match, code: string) => {
+      const token = `@@CODE${codeTokens.length}@@`;
+      codeTokens.push(`<code>${this.escapeHtml(code)}</code>`);
+      return token;
+    });
+
+    rendered = this.escapeHtml(rendered);
+    rendered = rendered.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_match, label: string, url: string) => {
+      const safeUrl = this.sanitizeLinkUrl(url);
+      if (!safeUrl) return label;
+      return `<a href="${this.escapeAttribute(safeUrl)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    });
+    rendered = rendered.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    rendered = rendered.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+    rendered = rendered.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    rendered = rendered.replace(/_([^_]+)_/g, '<em>$1</em>');
+    rendered = rendered.replace(/@@CODE(\d+)@@/g, (_match, tokenIndex: string) => {
+      return codeTokens[Number(tokenIndex)] ?? '';
+    });
+
+    return rendered;
+  }
+
+  private sanitizeLinkUrl(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        return parsed.toString();
+      }
+    } catch (_error) {
+      return null;
+    }
+    return null;
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  private escapeAttribute(value: string): string {
+    return this.escapeHtml(value);
+  }
+
   private createStreamingMessageElement(): HTMLElement {
     if (!this.chatContainer) return document.createElement('div');
 
@@ -334,10 +599,11 @@ class PaperAgentApp {
 
     const header = document.createElement('div');
     header.classList.add('message-header');
-    header.textContent = 'PaperAgent 助手';
+    header.textContent = 'PaperAgent Assistant';
 
     const content = document.createElement('div');
     content.classList.add('message-content');
+    content.dataset['rawText'] = '';
 
     messageDiv.appendChild(header);
     messageDiv.appendChild(content);
@@ -348,9 +614,11 @@ class PaperAgentApp {
   }
 
   private appendToStreamingMessage(el: HTMLElement, text: string): void {
-    const content = el.querySelector('.message-content');
+    const content = el.querySelector<HTMLElement>('.message-content');
     if (content) {
-      content.textContent = (content.textContent ?? '') + text;
+      const nextText = (content.dataset['rawText'] ?? '') + text;
+      content.dataset['rawText'] = nextText;
+      this.renderMessageContent(content, 'assistant', nextText);
       this.chatContainer!.scrollTop = this.chatContainer!.scrollHeight;
     }
   }
@@ -358,9 +626,11 @@ class PaperAgentApp {
   private finalizeStreamingMessage(el: HTMLElement, isError = false): void {
     el.classList.remove('streaming');
     if (isError) {
-      const content = el.querySelector('.message-content');
-      if (content && !content.textContent?.trim()) {
-        content.textContent = '[响应出错，请检查设置后重试]';
+      const content = el.querySelector<HTMLElement>('.message-content');
+      if (content && !(content.dataset['rawText'] ?? '').trim()) {
+        const errorText = '[Response failed. Check your settings and try again.]';
+        content.dataset['rawText'] = errorText;
+        this.renderMessageContent(content, 'assistant', errorText);
       }
     }
   }
@@ -374,11 +644,11 @@ class PaperAgentApp {
 
     const header = document.createElement('div');
     header.classList.add('message-header');
-    header.textContent = role === 'user' ? '您' : 'PaperAgent 助手';
+    header.textContent = role === 'user' ? 'You' : 'PaperAgent Assistant';
 
     const contentEl = document.createElement('div');
     contentEl.classList.add('message-content');
-    contentEl.textContent = content;
+    this.renderMessageContent(contentEl, role, content);
 
     messageDiv.appendChild(header);
     messageDiv.appendChild(contentEl);
@@ -388,7 +658,7 @@ class PaperAgentApp {
 
   // ── Settings ────────────────────────────────────────────────────────────────
 
-  /** 绑定设置 Modal 内部按钮事件，仅在初始化时调用一次 */
+  /** Bind settings modal events once during initialization. */
   private wireSettingsModal(): void {
     document.getElementById('providerSelect')?.addEventListener('change', () => this.updateBaseUrlRowVisibility());
     const temperatureInput = document.getElementById('temperatureInput') as HTMLInputElement | null;
@@ -404,7 +674,7 @@ class PaperAgentApp {
       if (e.target === e.currentTarget) this.closeSettings();
     });
 
-    // 文档查看器 Modal
+    // Document viewer modal
     document.getElementById('closeDocViewerBtn')?.addEventListener('click', () => this.closeDocumentViewer());
     document.getElementById('docViewerModal')?.addEventListener('click', (e) => {
       if (e.target === e.currentTarget) this.closeDocumentViewer();
@@ -415,7 +685,7 @@ class PaperAgentApp {
     const modal = document.getElementById('settingsModal');
     if (!modal) return;
 
-    // 将当前配置回填到表单
+    // Fill the form with the current configuration.
     const cfg = this.providerConfig;
     (document.getElementById('providerSelect') as HTMLSelectElement).value = cfg.provider;
     (document.getElementById('baseUrlInput') as HTMLInputElement).value = cfg.baseUrl ?? '';
@@ -452,8 +722,8 @@ class PaperAgentApp {
     const temperature = parseFloat((document.getElementById('temperatureInput') as HTMLInputElement).value);
     const maxTokens = parseInt((document.getElementById('maxTokensInput') as HTMLInputElement).value, 10);
 
-    if (!apiKey) { this.showNotification('API Key 不能为空', 'error'); return; }
-    if (!model) { this.showNotification('Model 不能为空', 'error'); return; }
+    if (!apiKey) { this.showNotification('API Key cannot be empty.', 'error'); return; }
+    if (!model) { this.showNotification('Model cannot be empty.', 'error'); return; }
 
     this.providerConfig = {
       provider,
@@ -469,10 +739,10 @@ class PaperAgentApp {
     const result = await window.electronAPI.saveConfig(config);
 
     if (result.success) {
-      this.showNotification('设置已保存', 'success');
+      this.showNotification('Settings saved.', 'success');
       this.closeSettings();
     } else {
-      this.showNotification(`保存失败: ${result.message}`, 'error');
+      this.showNotification(`Save failed: ${result.message}`, 'error');
     }
   }
 
@@ -485,7 +755,7 @@ class PaperAgentApp {
     const provider = (document.getElementById('providerSelect') as HTMLSelectElement).value as LLMProviderConfig['provider'];
     const baseUrl = (document.getElementById('baseUrlInput') as HTMLInputElement).value.trim();
 
-    if (!apiKey) { this.showNotification('请先填写 API Key', 'error'); return; }
+    if (!apiKey) { this.showNotification('Enter an API key first.', 'error'); return; }
 
     const testConfig: LLMProviderConfig = {
       provider,
@@ -498,7 +768,7 @@ class PaperAgentApp {
 
     const testBtn = document.getElementById('testConnectionBtn') as HTMLButtonElement;
     testBtn.disabled = true;
-    testBtn.textContent = '测试中...';
+    testBtn.textContent = 'Testing...';
     testResult.style.display = 'none';
 
     let fullText = '';
@@ -509,13 +779,13 @@ class PaperAgentApp {
         testConfig,
         (chunk) => { fullText += chunk; },
         () => {
-          testResult.textContent = `✓ 连接成功！响应: ${fullText.substring(0, 80)}`;
+          testResult.textContent = `✓ Connection successful. Response: ${fullText.substring(0, 80)}`;
           testResult.className = 'connection-result success';
           testResult.style.display = 'block';
           resolve();
         },
         (error) => {
-          testResult.textContent = `✗ 连接失败: ${error}`;
+          testResult.textContent = `✗ Connection failed: ${error}`;
           testResult.className = 'connection-result error';
           testResult.style.display = 'block';
           resolve();
@@ -524,7 +794,7 @@ class PaperAgentApp {
     });
 
     testBtn.disabled = false;
-    testBtn.textContent = '测试连接';
+    testBtn.textContent = 'Test Connection';
   }
 
   // ── Rendering ────────────────────────────────────────────────────────────────
@@ -534,7 +804,7 @@ class PaperAgentApp {
     this.outlineContainer.innerHTML = '';
 
     if (this.sessionData.outline.length === 0) {
-      this.outlineContainer.innerHTML = '<p>暂无大纲内容</p>';
+      this.outlineContainer.innerHTML = '<p>No outline yet.</p>';
       return;
     }
 
@@ -556,7 +826,7 @@ class PaperAgentApp {
         div.appendChild(titleDiv);
         div.appendChild(summaryDiv);
         div.addEventListener('click', () => {
-          this.showNotification(`${item.title}：${item.summary}`, 'info');
+          this.showNotification(`${item.title}: ${item.summary}`, 'info');
         });
         fragment.appendChild(div);
 
@@ -575,7 +845,7 @@ class PaperAgentApp {
     this.documentContainer.innerHTML = '';
 
     if (this.sessionData.documentLibrary.documents.length === 0) {
-      this.documentContainer.innerHTML = '<p>暂无文档</p>';
+      this.documentContainer.innerHTML = '<p>No documents yet.</p>';
       return;
     }
 
@@ -589,15 +859,15 @@ class PaperAgentApp {
 
       const title = document.createElement('div');
       title.classList.add('document-item-title');
-      title.textContent = doc.title || doc.path.split('/').pop() || '未知文档';
+      title.textContent = doc.title || doc.path.split('/').pop() || 'Untitled Document';
 
       const deleteBtn = document.createElement('button');
       deleteBtn.classList.add('delete-doc-btn');
       deleteBtn.textContent = '✕';
-      deleteBtn.title = '移除文档';
+      deleteBtn.title = 'Remove document';
       deleteBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        this.deleteDocument(doc.key);
+        void this.deleteDocument(doc.key);
       });
 
       header.appendChild(title);
@@ -605,7 +875,7 @@ class PaperAgentApp {
 
       const meta = document.createElement('div');
       meta.classList.add('document-item-meta');
-      const sizeKb = doc.size > 0 ? `${Math.round(doc.size / 1024)} KB` : '未知大小';
+      const sizeKb = doc.size > 0 ? `${Math.round(doc.size / 1024)} KB` : 'Unknown size';
       meta.textContent = `${doc.type.toUpperCase()} • ${sizeKb} • ${new Date(doc.uploadDate).toLocaleDateString()}`;
 
       div.appendChild(header);
@@ -618,19 +888,20 @@ class PaperAgentApp {
         div.appendChild(preview);
       }
 
-      // 点击文档项查看全文
+      // Click a document item to view the full extracted content.
       div.addEventListener('click', () => this.showDocumentViewer(doc));
 
       this.documentContainer.appendChild(div);
     }
   }
 
-  private deleteDocument(key: string): void {
+  private async deleteDocument(key: string): Promise<void> {
     if (!this.sessionData) return;
     this.sessionData.documentLibrary.documents = this.sessionData.documentLibrary.documents.filter(d => d.key !== key);
     this.sessionData.metadata.documentsCount = this.sessionData.documentLibrary.documents.length;
     this.renderDocuments();
-    this.showNotification('文档已移除', 'success');
+    await this.persistSessionSnapshot();
+    this.showNotification('Document removed.', 'success');
   }
 
   private showDocumentViewer(doc: import('../../shared/types.js').DocumentInfo): void {
@@ -639,15 +910,61 @@ class PaperAgentApp {
     const contentEl = document.getElementById('docViewerContent');
     if (!modal || !titleEl || !contentEl) return;
 
-    titleEl.textContent = doc.title || doc.path.split('/').pop() || '未知文档';
+    titleEl.textContent = doc.title || doc.path.split('/').pop() || 'Untitled Document';
     const text = doc.fullContent || doc.contentPreview;
-    contentEl.textContent = text || '（未提取到文本内容）';
+    contentEl.textContent = text || '(No extracted text available.)';
     modal.style.display = 'flex';
   }
 
   private closeDocumentViewer(): void {
     const modal = document.getElementById('docViewerModal');
     if (modal) modal.style.display = 'none';
+  }
+
+  private startSessionTitleEdit(): void {
+    if (!this.sessionData) {
+      this.showNotification('Create or load a session first.', 'error');
+      return;
+    }
+    if (!this.sessionTitle || !this.sessionTitleInput || !this.editSessionTitleBtn || !this.saveSessionTitleBtn || !this.cancelSessionTitleBtn) {
+      return;
+    }
+
+    this.sessionTitleInput.value = this.sessionData.title;
+    this.sessionTitle.style.display = 'none';
+    this.sessionTitleInput.style.display = '';
+    this.editSessionTitleBtn.style.display = 'none';
+    this.saveSessionTitleBtn.style.display = '';
+    this.cancelSessionTitleBtn.style.display = '';
+    this.sessionTitleInput.focus();
+    this.sessionTitleInput.select();
+  }
+
+  private cancelSessionTitleEdit(): void {
+    this.syncSessionTitleEditState();
+  }
+
+  private async commitSessionTitleEdit(): Promise<void> {
+    if (!this.sessionData || !this.sessionTitleInput) return;
+
+    const nextTitle = this.sessionTitleInput.value.trim();
+    if (!nextTitle) {
+      this.showNotification('Session name cannot be empty.', 'error');
+      this.sessionTitleInput.focus();
+      return;
+    }
+
+    if (nextTitle !== this.sessionData.title) {
+      this.sessionData = touchSession({
+        ...this.sessionData,
+        title: nextTitle
+      });
+      this.updateSessionTitle(nextTitle);
+      await this.persistSessionSnapshot({ touch: false });
+      this.showNotification('Session name updated.', 'success');
+    }
+
+    this.syncSessionTitleEditState();
   }
 
   private filterDocuments(query: string): void {
@@ -666,42 +983,140 @@ class PaperAgentApp {
     if (this.chatContainer) this.chatContainer.innerHTML = '';
   }
 
+  private renderConversationHistory(): void {
+    if (!this.chatContainer || !this.sessionData) return;
+    this.chatContainer.innerHTML = '';
+    for (const message of this.sessionData.conversationHistory) {
+      this.addMessageToChat(message.role, message.content);
+    }
+  }
+
+  private renderSession(): void {
+    if (!this.sessionData) return;
+    this.updateSessionTitle(this.sessionData.title);
+    this.syncSessionTitleEditState();
+    this.renderConversationHistory();
+    this.renderOutline();
+    this.renderDocuments();
+  }
+
   private updateSessionTitle(title: string): void {
     if (this.sessionTitle) this.sessionTitle.textContent = title;
+    if (this.sessionTitleInput) this.sessionTitleInput.value = title;
+  }
+
+  private syncSessionTitleEditState(): void {
+    if (!this.sessionTitle || !this.sessionTitleInput || !this.editSessionTitleBtn || !this.saveSessionTitleBtn || !this.cancelSessionTitleBtn) {
+      return;
+    }
+
+    this.sessionTitle.style.display = '';
+    this.sessionTitleInput.style.display = 'none';
+    this.saveSessionTitleBtn.style.display = 'none';
+    this.cancelSessionTitleBtn.style.display = 'none';
+    this.editSessionTitleBtn.style.display = '';
+    this.editSessionTitleBtn.disabled = !this.sessionData;
+    this.editSessionTitleBtn.title = this.sessionData ? 'Rename session' : 'Create or load a session first';
+
+    if (this.sessionData) {
+      this.sessionTitleInput.value = this.sessionData.title;
+    }
   }
 
   // ── Session History ──────────────────────────────────────────────────────────
 
-  private addToSessionHistory(sessionData: SessionData): void {
+  private normalizeSessionHistoryEntry(raw: Record<string, unknown>): SessionHistoryEntry | null {
+    const id = typeof raw['id'] === 'string' ? raw['id'] : '';
+    if (!id) return null;
+
+    const filePath = typeof raw['filePath'] === 'string' ? raw['filePath'] : '';
+    const storagePath = typeof raw['storagePath'] === 'string' && raw['storagePath']
+      ? raw['storagePath']
+      : filePath;
+
+    return {
+      id,
+      title: typeof raw['title'] === 'string' ? raw['title'] : 'Untitled Session',
+      description: typeof raw['description'] === 'string' ? raw['description'] : '',
+      createdAt: typeof raw['createdAt'] === 'string' ? raw['createdAt'] : new Date().toISOString(),
+      lastModified: typeof raw['lastModified'] === 'string' ? raw['lastModified'] : new Date().toISOString(),
+      filePath,
+      storagePath
+    };
+  }
+
+  private getSessionHistory(): SessionHistoryEntry[] {
     try {
-      const sessions: Array<{ id: string; title: string; description: string; createdAt: string; lastModified: string; filePath: string }> =
-        JSON.parse(localStorage.getItem('paperAgentSessions') ?? '[]');
-      const sessionInfo = {
+      const stored = JSON.parse(localStorage.getItem(SESSION_HISTORY_KEY) ?? '[]');
+      if (!Array.isArray(stored)) return [];
+
+      return stored
+        .map(entry => this.normalizeSessionHistoryEntry(entry as Record<string, unknown>))
+        .filter((entry): entry is SessionHistoryEntry => entry !== null);
+    } catch (e) {
+      console.error('Failed to read session history:', e);
+      return [];
+    }
+  }
+
+  private saveSessionHistory(sessions: SessionHistoryEntry[]): void {
+    localStorage.setItem(SESSION_HISTORY_KEY, JSON.stringify(sessions));
+  }
+
+  private upsertSessionHistory(sessionData: SessionData, paths: Partial<Pick<SessionHistoryEntry, 'filePath' | 'storagePath'>> = {}): void {
+    try {
+      const sessions = this.getSessionHistory();
+      const existing = sessions.find(s => s.id === sessionData.sessionId);
+      const sessionInfo: SessionHistoryEntry = {
         id: sessionData.sessionId,
         title: sessionData.title,
         description: sessionData.description,
         createdAt: sessionData.createdAt,
         lastModified: sessionData.lastModified,
-        filePath: ''
+        filePath: paths.filePath ?? existing?.filePath ?? '',
+        storagePath: paths.storagePath ?? existing?.storagePath ?? existing?.filePath ?? ''
       };
       const idx = sessions.findIndex(s => s.id === sessionInfo.id);
       if (idx !== -1) sessions[idx] = sessionInfo;
       else sessions.unshift(sessionInfo);
-      localStorage.setItem('paperAgentSessions', JSON.stringify(sessions));
+      this.saveSessionHistory(sessions);
       this.renderSessionHistory();
     } catch (e) {
-      console.error('写入会话历史失败:', e);
+      console.error('Failed to write session history:', e);
+    }
+  }
+
+  private async persistSessionSnapshot(options: { filePath?: string; touch?: boolean } = {}): Promise<void> {
+    if (!this.sessionData) return;
+
+    try {
+      if (options.touch !== false) {
+        this.sessionData = touchSession(this.sessionData);
+      }
+
+      const result = await window.electronAPI.saveSessionSnapshot(this.sessionData);
+      if (!result.success || !result.filePath) {
+        this.showNotification(`Autosave failed: ${result.message ?? 'Unknown error'}`, 'error');
+        return;
+      }
+
+      this.upsertSessionHistory(this.sessionData, {
+        filePath: options.filePath,
+        storagePath: result.filePath
+      });
+    } catch (e) {
+      console.error('Failed to autosave session:', e);
+      this.showNotification('Failed to autosave session.', 'error');
     }
   }
 
   private renderSessionHistory(): void {
     if (!this.sessionHistoryContainer) return;
     try {
-      const sessions: Array<{ id: string; title: string; description: string; createdAt: string; lastModified: string; filePath: string }> =
-        JSON.parse(localStorage.getItem('paperAgentSessions') ?? '[]');
+      const sessions = this.getSessionHistory();
 
       if (sessions.length === 0) {
-        this.sessionHistoryContainer.innerHTML = '<p class="no-sessions">暂无历史会话</p>';
+        this.sessionHistoryContainer.innerHTML = '<p class="no-sessions">No saved sessions yet.</p>';
         return;
       }
 
@@ -710,21 +1125,19 @@ class PaperAgentApp {
           <div class="session-header">
             <h4>${s.title}</h4>
             <div class="session-actions">
-              <button class="load-session-btn" data-session-id="${s.id}">加载</button>
-              <button class="delete-session-btn" data-session-id="${s.id}">删除</button>
+              <button class="delete-session-btn" data-session-id="${s.id}">Delete</button>
             </div>
           </div>
           <div class="session-info">
-            <p>${s.description || '无描述'}</p>
-            <small>创建: ${new Date(s.createdAt).toLocaleString()}</small>
+            <p>${s.description || 'No description'}</p>
+            <small>Updated: ${new Date(s.lastModified).toLocaleString()}</small>
           </div>
         </div>`).join('');
 
-      this.sessionHistoryContainer.querySelectorAll('.load-session-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          const sessionId = (e.target as HTMLElement).dataset['sessionId'];
-          if (sessionId) this.loadSessionById(sessionId);
+      this.sessionHistoryContainer.querySelectorAll('.session-item').forEach(item => {
+        item.addEventListener('click', () => {
+          const sessionId = (item as HTMLElement).dataset['sessionId'];
+          if (sessionId) void this.loadSessionById(sessionId);
         });
       });
 
@@ -732,77 +1145,73 @@ class PaperAgentApp {
         btn.addEventListener('click', (e) => {
           e.stopPropagation();
           const sessionId = (e.target as HTMLElement).dataset['sessionId'];
-          if (sessionId) this.deleteSessionById(sessionId);
+          if (sessionId) void this.deleteSessionById(sessionId);
         });
       });
     } catch (e) {
-      console.error('渲染会话历史失败:', e);
-      this.sessionHistoryContainer.innerHTML = '<p>加载历史时出错</p>';
+      console.error('Failed to render session history:', e);
+      this.sessionHistoryContainer.innerHTML = '<p>Error loading session history.</p>';
     }
   }
 
-  private deleteSessionById(sessionId: string): void {
-    if (!confirm('确定要从历史列表移除这个会话吗？（不会删除文件）')) return;
+  private async deleteSessionById(sessionId: string): Promise<void> {
+    if (!confirm('Remove this session from history? Exported files will not be deleted.')) return;
     try {
-      const sessions: Array<{ id: string }> = JSON.parse(localStorage.getItem('paperAgentSessions') ?? '[]');
-      localStorage.setItem('paperAgentSessions', JSON.stringify(sessions.filter(s => s.id !== sessionId)));
+      const sessions = this.getSessionHistory().filter(s => s.id !== sessionId);
+      this.saveSessionHistory(sessions);
+      const result = await window.electronAPI.deleteSessionSnapshot(sessionId);
+      if (!result.success) {
+        console.error('Failed to delete autosave file:', result.message);
+      }
       if (this.sessionData?.sessionId === sessionId) {
         this.sessionData = null;
-        this.updateSessionTitle('无活动会话');
+        this.updateSessionTitle('No Active Session');
+        this.syncSessionTitleEditState();
         this.clearChat();
         if (this.outlineContainer) this.outlineContainer.innerHTML = '';
         if (this.documentContainer) this.documentContainer.innerHTML = '';
       }
       this.renderSessionHistory();
-      this.showNotification('会话已从历史中移除', 'success');
+      this.showNotification('Session removed from history.', 'success');
     } catch (e) {
       console.error(e);
-      this.showNotification('删除失败', 'error');
+      this.showNotification('Delete failed.', 'error');
     }
   }
 
   private async loadSessionById(sessionId: string): Promise<void> {
-    const sessions: Array<{ id: string; filePath: string; title: string }> =
-      JSON.parse(localStorage.getItem('paperAgentSessions') ?? '[]');
+    const sessions = this.getSessionHistory();
     const session = sessions.find(s => s.id === sessionId);
-    if (!session?.filePath) {
-      this.showNotification('找不到会话文件，请重新保存后再加载', 'error');
+    const loadPaths = [...new Set([session?.storagePath, session?.filePath].filter((value): value is string => Boolean(value)))];
+    if (!session || loadPaths.length === 0) {
+      this.showNotification('Session data was not found. Save it again before loading.', 'error');
       return;
     }
 
     try {
-      this.sessionData = await window.electronAPI.loadSessionFromFile(session.filePath);
-      if (this.sessionData) {
-        this.updateSessionTitle(this.sessionData.title);
-        this.clearChat();
-        this.renderOutline();
-        this.renderDocuments();
-        this.showNotification(`会话 "${session.title}" 加载成功`, 'success');
-      } else {
-        this.showNotification('加载失败：文件格式不正确', 'error');
-      }
-    } catch (e) {
-      this.showNotification('加载会话时发生错误', 'error');
-      console.error(e);
-    }
-  }
+      for (const filePath of loadPaths) {
+        const loaded = await window.electronAPI.loadSessionFromFile(filePath);
+        if (!loaded) continue;
 
-  private updateSessionFilePath(sessionId: string, filePath: string): void {
-    try {
-      const sessions: Array<{ id: string; filePath: string }> =
-        JSON.parse(localStorage.getItem('paperAgentSessions') ?? '[]');
-      const idx = sessions.findIndex(s => s.id === sessionId);
-      if (idx !== -1) {
-        sessions[idx]!.filePath = filePath;
-        localStorage.setItem('paperAgentSessions', JSON.stringify(sessions));
+        this.sessionData = loaded;
+        this.renderSession();
+        await this.persistSessionSnapshot({
+          filePath: session.filePath,
+          touch: false
+        });
+        this.showNotification(`Session "${session.title}" loaded.`, 'success');
+        return;
       }
+
+      this.showNotification('The session file is missing or corrupted.', 'error');
     } catch (e) {
+      this.showNotification('An error occurred while loading the session.', 'error');
       console.error(e);
     }
   }
 }
 
-// 初始化应用（DOMContentLoaded 保证 DOM 已就绪）
+// Initialize the app after the DOM is ready.
 document.addEventListener('DOMContentLoaded', () => {
   new PaperAgentApp();
   SessionManager.initSessionManagement();

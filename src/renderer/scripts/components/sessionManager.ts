@@ -26,14 +26,14 @@ export class SessionManager {
   }
 
   public addSession(session: SessionInfo): void {
-    // 检查是否已存在相同ID的会话
+    // Check whether a session with the same ID already exists.
     const existingIndex = this.sessions.findIndex(s => s.id === session.id);
     if (existingIndex !== -1) {
-      // 如果存在，更新该会话
+      // Update the existing session entry.
       this.sessions[existingIndex] = session;
     } else {
-      // 否则添加新会话
-      this.sessions.unshift(session); // 添加到开头
+      // Otherwise insert the new session at the top.
+      this.sessions.unshift(session);
     }
     
     this.saveSessionsToStorage();
@@ -52,7 +52,7 @@ export class SessionManager {
   }
 
   public getAllSessions(): SessionInfo[] {
-    return [...this.sessions]; // 返回副本
+    return [...this.sessions];
   }
 
   public setOnSelect(callback: (session: SessionInfo) => void): void {
@@ -81,16 +81,16 @@ export class SessionManager {
 
   public render(): void {
     this.container.innerHTML = `
-      <h3>会话历史</h3>
+      <h3>Session History</h3>
       <div class="session-list">
         ${this.sessions.length === 0 
-          ? '<p class="no-sessions">暂无历史会话</p>' 
+          ? '<p class="no-sessions">No saved sessions yet.</p>' 
           : this.sessions.map(session => this.renderSessionItem(session)).join('')
         }
       </div>
     `;
     
-    // 为每个会话项添加点击事件
+    // Bind click handlers for each session item.
     this.sessions.forEach(session => {
       const element = document.getElementById(`session-${session.id}`);
       if (element) {
@@ -111,27 +111,25 @@ export class SessionManager {
       <div id="session-${session.id}" class="session-item">
         <div class="session-header">
           <h4>${session.title}</h4>
-          <button class="delete-session-btn" data-session-id="${session.id}">删除</button>
+          <button class="delete-session-btn" data-session-id="${session.id}">Delete</button>
         </div>
         <div class="session-info">
-          <p>${session.description || '无描述'}</p>
-          <small>创建于: ${createdDate}</small><br>
-          <small>更新于: ${modifiedDate}</small>
+          <p>${session.description || 'No description'}</p>
+          <small>Created: ${createdDate}</small><br>
+          <small>Updated: ${modifiedDate}</small>
         </div>
       </div>
     `;
   }
 
   public static async initSessionManagement(): Promise<void> {
-    // 这个静态方法可以用来初始化会话管理相关的UI功能
-    // 绑定删除按钮事件等
+    // Initialize session-management-related UI behavior.
     document.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).classList.contains('delete-session-btn')) {
         const sessionId = (e.target as HTMLElement).getAttribute('data-session-id');
         if (sessionId) {
-          if (confirm('确定要删除这个会话吗？此操作不可撤销。')) {
-            // 这里可以触发删除会话的操作
-            console.log(`删除会话: ${sessionId}`);
+          if (confirm('Delete this session? This action cannot be undone.')) {
+            console.log(`Delete session: ${sessionId}`);
           }
         }
       }

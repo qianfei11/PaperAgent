@@ -23,7 +23,7 @@ declare const window: Window & {
 
 export class DefaultDocumentService implements DocumentService {
 
-  // ── localStorage 缓存键前缀 ────────────────────────────────────────────────
+  // ── localStorage cache key prefix ─────────────────────────────────────────
   private static readonly CACHE_PREFIX = 'pa_doc_';
 
   private getFromCache(filePath: string): string | null {
@@ -34,11 +34,11 @@ export class DefaultDocumentService implements DocumentService {
 
   private saveToCache(filePath: string, text: string): void {
     try {
-      // 只缓存不超过 2MB 的文本，避免撑满 localStorage
+      // Cache only texts smaller than 2 MB to avoid filling localStorage.
       if (text.length < 2 * 1024 * 1024) {
         localStorage.setItem(DefaultDocumentService.CACHE_PREFIX + filePath, text);
       }
-    } catch (_e) { /* 存储已满时静默忽略 */ }
+    } catch (_e) { /* Ignore storage quota failures silently. */ }
   }
 
   async uploadDocument(filePath: string, onProgress?: (progress: number) => void): Promise<DocumentInfo> {
@@ -56,7 +56,7 @@ export class DefaultDocumentService implements DocumentService {
     let size = 0;
 
     try {
-      // 优先读缓存，避免重复 PDF/OCR 提取
+      // Prefer the cache to avoid repeating PDF/OCR extraction.
       const cached = this.getFromCache(filePath);
       if (cached !== null) {
         fullContent = cached;
@@ -73,7 +73,7 @@ export class DefaultDocumentService implements DocumentService {
       }
       onProgress?.(90);
     } catch (_e) {
-      // 文本提取失败不影响文档注册
+      // A text extraction failure should not block document registration.
     }
 
     onProgress?.(100);
@@ -117,13 +117,13 @@ export class DefaultDocumentService implements DocumentService {
   async extractTextFromPDF(filePath: string): Promise<string> {
     const result = await window.electronAPI.extractPDFText(filePath);
     if (result.success) return result.text;
-    throw new Error(result.message ?? 'PDF 文本提取失败');
+    throw new Error(result.message ?? 'Failed to extract text from PDF.');
   }
 
   async extractTextFromImage(filePath: string): Promise<string> {
     const result = await window.electronAPI.extractImageText(filePath);
     if (result.success) return result.text;
-    throw new Error(result.message ?? '图片 OCR 失败');
+    throw new Error(result.message ?? 'Image OCR failed.');
   }
 
   searchDocuments(query: string, documents: DocumentInfo[]): DocumentInfo[] {
@@ -132,7 +132,7 @@ export class DefaultDocumentService implements DocumentService {
     return documents.filter(doc => {
       if (doc.title.toLowerCase().includes(q)) return true;
       if (doc.type.toLowerCase().includes(q)) return true;
-      // 优先搜索全文，其次搜索预览
+      // Search full content first, then fall back to the preview.
       const content = (doc.fullContent ?? doc.contentPreview).toLowerCase();
       return content.includes(q);
     });

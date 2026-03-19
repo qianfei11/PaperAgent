@@ -122,7 +122,7 @@ export class ContextService {
             if (!updatedMap[entity]) {
                 updatedMap[entity] = {
                     name: entity,
-                    description: `关于 ${entity} 的信息`,
+                    description: `Information about ${entity}`,
                     relatedDocuments: [],
                     occurrences: []
                 };

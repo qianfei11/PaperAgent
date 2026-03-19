@@ -57,13 +57,13 @@ export class DefaultDocumentService {
         const result = await window.electronAPI.extractPDFText(filePath);
         if (result.success)
             return result.text;
-        throw new Error(result.message ?? 'PDF 文本提取失败');
+        throw new Error(result.message ?? 'Failed to extract text from PDF.');
     }
     async extractTextFromImage(filePath) {
         const result = await window.electronAPI.extractImageText(filePath);
         if (result.success)
             return result.text;
-        throw new Error(result.message ?? '图片 OCR 失败');
+        throw new Error(result.message ?? 'Image OCR failed.');
     }
     searchDocuments(query, documents) {
         if (!query.trim())
