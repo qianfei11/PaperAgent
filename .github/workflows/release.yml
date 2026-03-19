@@ -48,7 +48,7 @@ jobs:
             build_args: --x64
             asset_glob: release/*.exe
           - name: macOS
-            os: macos-13
+            os: macos-latest
             build_script: build:mac
             build_args: --x64
             asset_glob: release/*.dmg
