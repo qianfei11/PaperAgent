@@ -43,6 +43,7 @@
     "appId": "com.paperagent.app",
     "productName": "PaperAgent",
     "afterPack": "after-pack.cjs",
+    "npmRebuild": false,
     "directories": {
       "output": "release"
     },
