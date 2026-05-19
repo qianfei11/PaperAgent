@@ -19,6 +19,7 @@ declare global {
       selectFiles: (filters: unknown[]) => Promise<string[]>;
       getConfig: () => Promise<AppConfig>;
       saveConfig: (config: AppConfig) => Promise<{ success: boolean; message?: string }>;
+      selectDirectory: () => Promise<string[]>;
       extractPDFText: (path: string) => Promise<{ success: boolean; text: string; message?: string }>;
       extractImageText: (path: string) => Promise<{ success: boolean; text: string; message?: string }>;
       sendLLMMessage: (requestId: string, messages: Array<{ role: string; content: string }>, config: LLMProviderConfig) => void;

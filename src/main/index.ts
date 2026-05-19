@@ -266,7 +266,7 @@ if (!gotTheLock) {
           parseSseLine(line, isAnthropic, (text) => send('llm-chunk', { requestId, text }));
         }
       });
-      stream.on('end', () => { onComplete(); send('llm-done', { requestId }); });
+      stream.on('end', () => { send('llm-done', { requestId }); onComplete(); });
       stream.on('error', (err: Error) => {
         onComplete();
         // Do not emit an error for axios cancellation because the renderer already handles it.

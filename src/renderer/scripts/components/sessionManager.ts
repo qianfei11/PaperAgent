@@ -122,15 +122,13 @@ export class SessionManager {
     `;
   }
 
-  public static async initSessionManagement(): Promise<void> {
+  public static initSessionManagement(): void {
     // Initialize session-management-related UI behavior.
     document.addEventListener('click', (e) => {
       if ((e.target as HTMLElement).classList.contains('delete-session-btn')) {
         const sessionId = (e.target as HTMLElement).getAttribute('data-session-id');
         if (sessionId) {
-          if (confirm('Delete this session? This action cannot be undone.')) {
-            console.log(`Delete session: ${sessionId}`);
-          }
+          console.log(`Delete session: ${sessionId}`);
         }
       }
     });
